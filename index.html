@@ -127,9 +127,11 @@ async function getOnlineUsers(){
 }
 async function setOnlineUsers(users){
   try{
+    console.log("setOnlineUsers: saving",users.length,"users to Firebase");
     const p=db.collection("farmiq").doc("users").set({list:users,updatedAt:new Date().toISOString()});
     const timeout=new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),8000));
     await Promise.race([p,timeout]);
+    console.log("setOnlineUsers: saved successfully");
   }catch(e){console.error("Firebase setUsers error",e);throw e;}
 }
 async function getOnlineSession(){
@@ -1608,9 +1610,11 @@ function App(){
     const unsub=db.collection("farmiq").doc("users").onSnapshot({includeMetadataChanges:false},doc=>{
       if(doc.exists&&doc.data().list){
         const fresh=doc.data().list;
+        console.log("onSnapshot fired: got",fresh.length,"users, pending:",(fresh.filter(u=>u.role==="worker"&&!u.approved).length));
         // Force update — replaces local state with latest Firebase data
         setUsers([...fresh]);
       } else {
+        console.log("onSnapshot fired: no data, seeding admin");
         // First time — seed admin
         setOnlineUsers(INIT_USERS);
         setUsers([...INIT_USERS]);
