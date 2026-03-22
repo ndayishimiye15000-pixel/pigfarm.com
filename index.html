@@ -117,18 +117,31 @@ const HEAT_CYCLE=21;
 function getLS(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch{return d;}}
 function setLS(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
 
-/* ─── Firebase Firestore User Storage ─── */
+/* ─── JSONBin User Storage ─── */
+const JBIN_ID="69c0208caa77b81da90afb68";
+const JBIN_KEY="$2a$10$LDktMj7oTNhMBjIidsIPoelQmzqlhnMXDvMyMHbIe9yYope1CnBLO";
+const JBIN_URL="https://api.jsonbin.io/v3/b/"+JBIN_ID;
+
 async function getOnlineUsers(){
   try{
-    const doc=await db.collection("farmiq").doc("users").get();
-    if(doc.exists&&doc.data().list) return doc.data().list;
+    const res=await fetch(JBIN_URL+"/latest",{
+      headers:{"X-Master-Key":JBIN_KEY,"X-Bin-Meta":"false"}
+    });
+    if(!res.ok) throw new Error("fetch failed "+res.status);
+    const data=await res.json();
+    if(data&&data.list) return data.list;
     return null;
-  }catch(e){console.error("Firebase getUsers error",e);return null;}
+  }catch(e){console.error("JSONBin getUsers error",e);return null;}
 }
 async function setOnlineUsers(users){
   try{
-    await db.collection("farmiq").doc("users").set({list:users,updatedAt:new Date().toISOString()});
-  }catch(e){console.error("Firebase setUsers error",e);throw e;}
+    const res=await fetch(JBIN_URL,{
+      method:"PUT",
+      headers:{"Content-Type":"application/json","X-Master-Key":JBIN_KEY},
+      body:JSON.stringify({list:users,updatedAt:new Date().toISOString()})
+    });
+    if(!res.ok) throw new Error("save failed "+res.status);
+  }catch(e){console.error("JSONBin setUsers error",e);throw e;}
 }
 async function getOnlineSession(){
   try{
@@ -1595,39 +1608,33 @@ function App(){
   const [page,setPage]=useState("home");
   const [showApiModal,setShowApiModal]=useState(false);
 
-  // Load users from Firebase on mount + real-time listener
+  // Load users from JSONBin on mount + poll every 15s
   useEffect(()=>{
     // Initial session load
     getOnlineSession().then(s=>{
       if(s) setUser(s);
       setSessionLoaded(true);
     });
-    // Real-time listener on Firestore users doc — keeps admin in sync when workers register
-    const unsub=db.collection("farmiq").doc("users").onSnapshot({includeMetadataChanges:false},doc=>{
-      if(doc.exists&&doc.data().list){
-        const fresh=doc.data().list;
-        console.log("onSnapshot fired: got",fresh.length,"users, pending:",(fresh.filter(u=>u.role==="worker"&&!u.approved).length));
-        // Force update — replaces local state with latest Firebase data
+    // Load users from JSONBin
+    getOnlineUsers().then(fresh=>{
+      if(fresh&&fresh.length>0){
         setUsers([...fresh]);
       } else {
-        // First time — seed admin
         setOnlineUsers(INIT_USERS);
         setUsers([...INIT_USERS]);
       }
       setUsersLoaded(true);
-    },err=>{
-      console.error("Firestore listener error",err);
-      setUsersLoaded(true);
-    });
-    // Polling: check Firebase every 10 seconds for new workers
+    }).catch(()=>setUsersLoaded(true));
+
+    // Poll JSONBin every 15 seconds for new workers
     const poll=setInterval(async()=>{
       try{
         const fresh=await getOnlineUsers();
         if(fresh&&fresh.length>0) setUsers([...fresh]);
       }catch(e){}
-    },10000);
+    },15000);
 
-    return()=>{unsub();clearInterval(poll);};
+    return()=>{clearInterval(poll);};
   },[]);
 
   // Persist users online whenever they change (after load)
