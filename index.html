@@ -127,11 +127,9 @@ async function getOnlineUsers(){
 }
 async function setOnlineUsers(users){
   try{
-    console.log("setOnlineUsers: saving",users.length,"users to Firebase");
     const p=db.collection("farmiq").doc("users").set({list:users,updatedAt:new Date().toISOString()});
     const timeout=new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),8000));
     await Promise.race([p,timeout]);
-    console.log("setOnlineUsers: saved successfully");
   }catch(e){console.error("Firebase setUsers error",e);throw e;}
 }
 async function getOnlineSession(){
@@ -1614,7 +1612,6 @@ function App(){
         // Force update — replaces local state with latest Firebase data
         setUsers([...fresh]);
       } else {
-        console.log("onSnapshot fired: no data, seeding admin");
         // First time — seed admin
         setOnlineUsers(INIT_USERS);
         setUsers([...INIT_USERS]);
@@ -1624,7 +1621,15 @@ function App(){
       console.error("Firestore listener error",err);
       setUsersLoaded(true);
     });
-    return()=>unsub();
+    // Polling: check Firebase every 10 seconds for new workers
+    const poll=setInterval(async()=>{
+      try{
+        const fresh=await getOnlineUsers();
+        if(fresh&&fresh.length>0) setUsers([...fresh]);
+      }catch(e){}
+    },10000);
+
+    return()=>{unsub();clearInterval(poll);};
   },[]);
 
   // Persist users online whenever they change (after load)
@@ -2202,8 +2207,27 @@ function DLogs({logs,pigs,feeds,sales,expenses,incomes,allData}){
 /* ─── Workers ─── */
 function Workers({users,setUsers}){
   const [saving,setSaving]=React.useState(null);
+  const [refreshing,setRefreshing]=React.useState(false);
+  const [lastCheck,setLastCheck]=React.useState("");
   const pending=users.filter(u=>u.role==="worker"&&!u.approved);
   const approved=users.filter(u=>u.role==="worker"&&u.approved);
+
+  // Auto-refresh every 10 seconds when on this page
+  useEffect(()=>{
+    refresh();
+    const t=setInterval(refresh,10000);
+    return()=>clearInterval(t);
+  },[]);
+
+  async function refresh(){
+    setRefreshing(true);
+    try{
+      const fresh=await getOnlineUsers();
+      if(fresh&&fresh.length>0) setUsers([...fresh]);
+      setLastCheck(new Date().toLocaleTimeString());
+    }catch(e){}
+    setRefreshing(false);
+  }
 
   async function approve(id){
     setSaving(id);
@@ -2228,8 +2252,18 @@ function Workers({users,setUsers}){
   }
 
   return(<div>
-    <div style={S.h1}>Worker Management</div>
-    <div style={S.sub}>{approved.length} active · {pending.length} pending approval</div>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+      <div style={S.h1}>Worker Management</div>
+      <button onClick={refresh} disabled={refreshing} style={{
+        padding:"7px 14px",borderRadius:8,border:"none",cursor:"pointer",
+        background:"rgba(22,163,74,.12)",color:C.accent,fontWeight:700,
+        fontSize:12,fontFamily:"inherit",display:"flex",alignItems:"center",gap:6
+      }}>
+        <span style={refreshing?{display:"inline-block",animation:"spin .8s linear infinite"}:{}}>🔄</span>
+        {refreshing?"Checking…":"Refresh"}
+      </button>
+    </div>
+    <div style={{...S.sub,marginBottom:14}}>{approved.length} active · {pending.length} pending · {lastCheck&&"Last checked: "+lastCheck}</div>
     {pending.length>0&&<div style={S.card}>
       <div style={{fontSize:13,fontWeight:700,color:C.amber,marginBottom:10}}>⏳ Pending Approval ({pending.length})</div>
       {pending.map(w=><div key={w.id} style={{...S.row,background:"rgba(245,158,11,.05)"}}>
