@@ -4,12 +4,26 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>FarmIQ — AI Pig Farm Management</title>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <!-- Firebase -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script>
+// Show loading error if scripts fail to load
+window.onerror = function(msg, src, line, col, err) {
+  document.getElementById("root").innerHTML =
+    "<div style='padding:30px;font-family:sans-serif;text-align:center'>" +
+    "<div style='font-size:40px;margin-bottom:16px'>⚠️</div>" +
+    "<div style='font-size:18px;font-weight:700;color:#dc2626;margin-bottom:8px'>App failed to load</div>" +
+    "<div style='font-size:13px;color:#64748b;margin-bottom:16px'>Error: " + msg + "</div>" +
+    "<div style='font-size:13px;color:#64748b'>Please check your internet connection and refresh the page.</div>" +
+    "<button onclick='location.reload()' style='margin-top:16px;padding:10px 24px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer'>🔄 Refresh</button>" +
+    "</div>";
+  return false;
+};
+</script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:'Segoe UI',system-ui,sans-serif;background:#f0f4f8;color:#1e293b;
@@ -35,7 +49,13 @@ select option{background:#fff;color:#1e293b;}
 </style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root">
+  <div style="min-height:100vh;background:linear-gradient(135deg,#0f2318 0%,#1a3a2a 100%);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;">
+    <div style="width:56px;height:56px;border-radius:16px;background:rgba(74,222,128,.12);border:1px solid rgba(74,222,128,.25);display:flex;align-items:center;justify-content:center;font-size:26px;">🐷</div>
+    <div style="color:#4ade80;font-size:14px;font-weight:600;letter-spacing:2px;font-family:sans-serif;">LOADING FARMIQ…</div>
+    <div style="font-size:12px;color:rgba(255,255,255,.4);font-family:sans-serif;">Please wait, connecting…</div>
+  </div>
+</div>
 <div id="pdf-frame"></div>
 <script>
 // Initialize Firebase before React
@@ -52,6 +72,18 @@ firebase.initializeApp(firebaseConfig);
 var db = firebase.firestore();
 </script>
 <script type="text/babel">
+// Safety check — if React or Firebase didn't load, show error
+if(typeof React==="undefined"||typeof firebase==="undefined"){
+  document.getElementById("root").innerHTML=
+    "<div style='padding:30px;font-family:sans-serif;text-align:center'>" +
+    "<div style='font-size:40px;margin-bottom:16px'>📶</div>" +
+    "<div style='font-size:18px;font-weight:700;color:#dc2626;margin-bottom:8px'>Failed to load app</div>" +
+    "<div style='font-size:13px;color:#64748b;margin-bottom:4px'>Could not connect to required services.</div>" +
+    "<div style='font-size:13px;color:#64748b;margin-bottom:16px'>Make sure you have a working internet connection.</div>" +
+    "<button onclick='location.reload()' style='padding:10px 24px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;font-family:sans-serif'>🔄 Try Again</button>" +
+    "</div>";
+  throw new Error("React or Firebase not loaded");
+}
 const {useState,useEffect,useRef,useCallback}=React;
 const uid=()=>Math.random().toString(36).slice(2,10);
 const toDay=()=>new Date().toISOString().slice(0,10);
