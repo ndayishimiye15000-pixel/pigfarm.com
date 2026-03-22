@@ -1787,22 +1787,23 @@ function Login({users,setUsers,setUser}){
     if(form.password.length<6) return setErr("Password must be at least 6 characters.");
     if(form.password!==form.confirmPassword) return setErr("Passwords do not match.");
     setLoading(true);
-    // Always read freshest users from online storage to avoid stale duplicate check
-    let freshUsers=await getOnlineUsers();
-    if(!freshUsers||freshUsers.length===0) freshUsers=users;
-    if(freshUsers.find(u=>u.username.toLowerCase()===form.username.toLowerCase())){
+    if(users.find(u=>u.username.toLowerCase()===form.username.toLowerCase())){
       setLoading(false);
       return setErr("That username is already taken.");
     }
     const newUser={id:uid(),name:form.name.trim(),username:form.username.trim(),password:form.password,role:"worker",approved:false};
-    const updated=[...freshUsers,newUser];
-    await setOnlineUsers(updated);
-    setUsers(updated);
-    setOk("Account created! An admin must approve your access before you can sign in.");
-    setErr("");
+    const updated=[...users,newUser];
+    try{
+      await setOnlineUsers(updated);
+      setUsers(updated);
+      setOk("Account created! An admin must approve your access before you can sign in.");
+      setErr("");
+      setTab("login");
+      setForm({name:"",username:"",password:"",confirmPassword:""});
+    }catch(e){
+      setErr("Connection error. Please check your internet and try again.");
+    }
     setLoading(false);
-    setTab("login");
-    setForm({name:"",username:"",password:"",confirmPassword:""});
   }
 
   const cardStyle={
