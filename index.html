@@ -1831,9 +1831,15 @@ function Login({users,setUsers,setUser}){
     if(form.password!==form.confirmPassword) return setErr("Passwords do not match.");
     setLoading(true);
     try{
-      // Always fetch FRESH users from Firebase before saving to avoid stale overwrites
-      let freshUsers=await getOnlineUsers();
-      if(!freshUsers||freshUsers.length===0) freshUsers=users;
+      // Try to get fresh users, but fall back to local if Firebase is slow
+      let freshUsers=users;
+      try{
+        const fromDB=await getOnlineUsers();
+        if(fromDB&&fromDB.length>0) freshUsers=fromDB;
+      }catch(e){
+        // Firebase fetch failed, use local users — still allow registration
+        console.warn("Could not fetch fresh users, using local",e);
+      }
       if(freshUsers.find(u=>u.username.toLowerCase()===form.username.toLowerCase())){
         setLoading(false);
         return setErr("That username is already taken.");
@@ -1848,7 +1854,7 @@ function Login({users,setUsers,setUser}){
       setForm({name:"",username:"",password:"",confirmPassword:""});
     }catch(e){
       console.error("reg error",e);
-      setErr("Registration failed. Please check your connection and try again.");
+      setErr("Registration failed. Please check your internet connection and try again.");
     }
     setLoading(false);
   }
