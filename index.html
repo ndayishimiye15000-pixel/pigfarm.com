@@ -161,13 +161,28 @@ async function fsSet(key,list){
   try{await db.collection("farmiq").doc(key).set({list,updatedAt:new Date().toISOString()});}
   catch(e){console.error("fsSet error",key,e);}
 }
-// fsListen now accepts a fromRemoteRef (React ref) to flag when data comes from Firestore
-// so we don't re-save it back immediately (avoids admin overwriting worker data)
-function fsListen(key,setter,setLoaded,fallback,fromRemoteRef){
+
+// fsAppend: safely adds new items without overwriting other clients' data.
+// Reads current Firestore list, merges new items by id, then writes back.
+// This fixes the race condition where admin and worker overwrite each other.
+async function fsAppend(key,newItems){
+  const ref=db.collection("farmiq").doc(key);
+  try{
+    const doc=await ref.get();
+    const existing=(doc.exists&&doc.data().list)||[];
+    const newIds=new Set(newItems.map(x=>x.id));
+    const merged=[...existing.filter(x=>!newIds.has(x.id)),...newItems];
+    await ref.set({list:merged,updatedAt:new Date().toISOString()});
+  }catch(e){console.error("fsAppend error",key,e);}
+}
+
+// fsListen: real-time listener. Stores last snapshot JSON in lastRemoteRef
+// so save effects can detect whether a state change is truly local or a Firestore echo.
+function fsListen(key,setter,setLoaded,fallback,lastRemoteRef){
   return db.collection("farmiq").doc(key).onSnapshot(doc=>{
-    if(fromRemoteRef) fromRemoteRef.current=true;
-    if(doc.exists&&doc.data().list) setter(doc.data().list);
-    else if(fallback!==undefined) setter(fallback);
+    const incoming=(doc.exists&&doc.data().list)||(fallback||[]);
+    if(lastRemoteRef) lastRemoteRef.current=JSON.stringify(incoming);
+    setter(incoming);
     if(setLoaded) setLoaded(true);
   },err=>{
     console.error("fsListen error",key,err);
@@ -1611,18 +1626,18 @@ function App(){
   const [page,setPage]=useState("home");
   const [showApiModal,setShowApiModal]=useState(false);
 
-  // Refs to track when a state change came FROM Firestore (remote) vs local user action.
-  // When fromRemote is true we skip saving back to Firestore to avoid overwriting
-  // a worker's submission with the admin's stale local state.
-  const pigsRemote=useRef(false);
-  const feedsRemote=useRef(false);
-  const salesRemote=useRef(false);
-  const logsRemote=useRef(false);
-  const expensesRemote=useRef(false);
-  const incomesRemote=useRef(false);
-  const messagesRemote=useRef(false);
-  const reproRemote=useRef(false);
-  const stockRemote=useRef(false);
+  // Refs store the last JSON snapshot received FROM Firestore.
+  // Save effects compare current state JSON against this to skip echo-saves
+  // (prevents admin or worker overwriting each other's fresh data).
+  const pigsRemote=useRef("");
+  const feedsRemote=useRef("");
+  const salesRemote=useRef("");
+  const logsRemote=useRef("");
+  const expensesRemote=useRef("");
+  const incomesRemote=useRef("");
+  const messagesRemote=useRef("");
+  const reproRemote=useRef("");
+  const stockRemote=useRef("");
   const sessionsRemote=useRef(false);
 
   // Load users from JSONBin on mount + poll every 15s
@@ -1677,52 +1692,54 @@ function App(){
     return()=>unsubs.forEach(u=>u());
   },[]);
 
-  // Save to Firestore whenever data changes locally (after initial load).
-  // If fromRemote ref is set, the change came from a Firestore snapshot — skip saving
-  // to avoid instantly overwriting another user's (e.g. worker's) submission.
+  // Save to Firestore only when data changed LOCALLY (not as an echo of a remote snapshot).
+  // We compare JSON of current state against last snapshot received from Firestore.
+  // For worker-submitted collections (feeds, sales, logs) we use fsAppend to safely
+  // merge items instead of overwriting — this prevents admin's open session from
+  // wiping a worker's just-submitted entry.
   useEffect(()=>{
     if(!pigsLoaded) return;
-    if(pigsRemote.current){pigsRemote.current=false;return;}
+    if(JSON.stringify(pigs)===pigsRemote.current) return;
     fsSet("pigs",pigs);
   },[pigs,pigsLoaded]);
   useEffect(()=>{
     if(!feedsLoaded) return;
-    if(feedsRemote.current){feedsRemote.current=false;return;}
-    fsSet("feeds",feeds);
+    if(JSON.stringify(feeds)===feedsRemote.current) return;
+    fsAppend("feeds",feeds);
   },[feeds,feedsLoaded]);
   useEffect(()=>{
     if(!salesLoaded) return;
-    if(salesRemote.current){salesRemote.current=false;return;}
-    fsSet("sales",sales);
+    if(JSON.stringify(sales)===salesRemote.current) return;
+    fsAppend("sales",sales);
   },[sales,salesLoaded]);
   useEffect(()=>{
     if(!logsLoaded) return;
-    if(logsRemote.current){logsRemote.current=false;return;}
-    fsSet("logs",logs);
+    if(JSON.stringify(logs)===logsRemote.current) return;
+    fsAppend("logs",logs);
   },[logs,logsLoaded]);
   useEffect(()=>{
     if(!expensesLoaded) return;
-    if(expensesRemote.current){expensesRemote.current=false;return;}
+    if(JSON.stringify(expenses)===expensesRemote.current) return;
     fsSet("expenses",expenses);
   },[expenses,expensesLoaded]);
   useEffect(()=>{
     if(!incomesLoaded) return;
-    if(incomesRemote.current){incomesRemote.current=false;return;}
+    if(JSON.stringify(incomes)===incomesRemote.current) return;
     fsSet("incomes",incomes);
   },[incomes,incomesLoaded]);
   useEffect(()=>{
     if(!messagesLoaded) return;
-    if(messagesRemote.current){messagesRemote.current=false;return;}
+    if(JSON.stringify(messages)===messagesRemote.current) return;
     fsSet("messages",messages);
   },[messages,messagesLoaded]);
   useEffect(()=>{
     if(!reproLoaded) return;
-    if(reproRemote.current){reproRemote.current=false;return;}
+    if(JSON.stringify(reproductions)===reproRemote.current) return;
     fsSet("reproductions",reproductions);
   },[reproductions,reproLoaded]);
   useEffect(()=>{
     if(!stockLoaded) return;
-    if(stockRemote.current){stockRemote.current=false;return;}
+    if(JSON.stringify(stock)===stockRemote.current) return;
     fsSet("stock",stock);
   },[stock,stockLoaded]);
 
@@ -1775,6 +1792,7 @@ function App(){
     {id:"daylogs",l:"📋 Daily Logs"},
     {id:"messages",l:"📢 Messages"+(messages.length?" ("+messages.length+")":"")},
     {id:"workers",l:"👷 Workers"+(pending.length?" ("+pending.length+")":"")},
+    {id:"workerdata",l:"📂 Worker Data"},
     {id:"remote",l:"🖥️ Remote Work"+(sessions.filter(s=>s.status==="pending").length?" ⚠️"+sessions.filter(s=>s.status==="pending").length:"")}
   ];
   const workerNav=[
@@ -1855,6 +1873,7 @@ function App(){
       {isAdmin&&page==="daylogs"&&<DLogs logs={logs} pigs={pigs} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} allData={allData}/>}
       {isAdmin&&page==="messages"&&<AIMessages users={users} messages={messages} setMessages={setMessages} pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
       {isAdmin&&page==="workers"&&<Workers users={users} setUsers={setUsers}/>}
+      {isAdmin&&page==="workerdata"&&<WorkerData users={users} logs={logs} feeds={feeds} sales={sales} pigs={pigs}/>}
       {isAdmin&&page==="remote"&&<RemoteWorkAdmin sessions={sessions} setSessions={setSessions} users={users}/>}
       {!isAdmin&&page==="home"&&<WHome user={user} logs={logs} feeds={feeds} sales={sales} messages={messages}/>}
       {!isAdmin&&page==="inbox"&&<WorkerInbox messages={messages}/>}
@@ -2360,6 +2379,138 @@ function Workers({users,setUsers}){
   </div>);
 }
 
+/* ─── Admin: Worker Data View ─── */
+function WorkerData({users,logs,feeds,sales,pigs}){
+  const workers=users.filter(u=>u.role==="worker"&&u.approved);
+  const [selected,setSelected]=React.useState(workers[0]?.id||"all");
+  const [tab,setTab]=React.useState("logs");
+
+  const filterW=arr=>selected==="all"?arr:arr.filter(x=>x.workerId===selected);
+  const wLogs=filterW(logs);
+  const wFeeds=filterW(feeds);
+  const wSales=filterW(sales);
+
+  const workerOptions=[{id:"all",name:"All Workers"},...workers];
+
+  return(<div>
+    <div style={S.h1}>👷 Worker Activity Data</div>
+    <div style={S.sub}>View every submission made by your workers</div>
+
+    {/* Worker selector */}
+    <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
+      {workerOptions.map(w=>(
+        <button key={w.id} onClick={()=>setSelected(w.id)} style={{
+          padding:"7px 16px",borderRadius:20,border:"1.5px solid "+(selected===w.id?C.accent:C.border),
+          background:selected===w.id?C.accentSoft:"transparent",
+          color:selected===w.id?C.accent:C.muted,
+          fontWeight:selected===w.id?700:500,fontSize:12,cursor:"pointer",fontFamily:"inherit"
+        }}>{w.name}{w.id!=="all"&&<span style={{marginLeft:6,fontSize:10,color:C.faint}}>
+          ({logs.filter(l=>l.workerId===w.id).length}L · {feeds.filter(f=>f.workerId===w.id).length}F · {sales.filter(s=>s.workerId===w.id).length}S)
+        </span>}</button>
+      ))}
+    </div>
+
+    {/* Summary stats for selected worker(s) */}
+    <div style={S.g4}>
+      {[
+        {l:"Daily Reports",v:wLogs.length,c:C.accent},
+        {l:"Feeding Logs",v:wFeeds.length,c:C.amber},
+        {l:"Sales Made",v:wSales.length,c:"#10b981"},
+        {l:"Revenue Generated",v:fmtRWF(wSales.reduce((s,x)=>s+(x.total||0),0)),c:C.purple}
+      ].map(s=>(
+        <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c,fontSize:s.v?.toString().length>8?14:22}}>{s.v}</div></div>
+      ))}
+    </div>
+
+    {/* Tabs */}
+    <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border}}>
+      {[["logs","📝 Daily Reports"],["feeds","🌾 Feeding Logs"],["sales","🏷️ Sales"]].map(([t,l])=>(
+        <button key={t} style={S.tab(tab===t)} onClick={()=>setTab(t)}>{l}</button>
+      ))}
+    </div>
+
+    {/* Daily Logs tab */}
+    {tab==="logs"&&(<div>
+      {wLogs.length===0&&<div style={{...S.card,color:C.faint,fontSize:13,textAlign:"center"}}>No daily reports found.</div>}
+      {wLogs.slice().reverse().map((log,i)=>(
+        <div key={i} style={S.card}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}>
+            <div style={{fontWeight:700,color:C.text}}>{log.worker} <span style={{fontSize:11,color:C.faint,fontWeight:400}}>@{users.find(u=>u.id===log.workerId)?.username||""}</span></div>
+            <span style={{fontSize:11,color:C.faint}}>{log.date}</span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:7,marginBottom:7}}>
+            {[["Checked",log.checked],["Sick",log.sick],["Deaths",log.deaths],["Births",log.births],["Water",log.water?"✓":"✗"],["Cleaned",log.cleaned?"✓":"✗"]].map(([l,v])=>(
+              <div key={l} style={{background:C.elevated,borderRadius:5,padding:"5px 9px"}}>
+                <div style={{fontSize:9,color:C.faint}}>{l}</div>
+                <div style={{color:(l==="Sick"||l==="Deaths")&&v>0?C.red:C.text,marginTop:2,fontSize:12}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          {log.notes&&<div style={{padding:"7px 11px",background:C.elevated,borderRadius:6,fontSize:12,color:C.muted,fontStyle:"italic"}}>"{log.notes}"</div>}
+        </div>
+      ))}
+    </div>)}
+
+    {/* Feeding Logs tab */}
+    {tab==="feeds"&&(<div>
+      {wFeeds.length===0&&<div style={{...S.card,color:C.faint,fontSize:13,textAlign:"center"}}>No feeding logs found.</div>}
+      {wFeeds.slice().reverse().map((f,i)=>{
+        const pig=pigs.find(p=>p.id===f.pigId);
+        return(<div key={i} style={S.card}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+            <div>
+              <div style={{fontWeight:700,color:C.text}}>{f.worker}</div>
+              <div style={{fontSize:11,color:C.faint}}>{f.date} · {pig?pig.tag:"All pigs"}</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontWeight:700,color:C.amber}}>{f.feedType}</div>
+              <div style={{fontSize:12,color:C.muted}}>{f.kg}kg · {fmtRWF(f.cost)}</div>
+            </div>
+          </div>
+          {f.notes&&<div style={{fontSize:11,color:C.faint,fontStyle:"italic"}}>"{f.notes}"</div>}
+        </div>);
+      })}
+      {wFeeds.length>0&&<div style={{...S.card,background:"rgba(245,158,11,.05)",border:"1px solid rgba(245,158,11,.2)"}}>
+        <div style={{display:"flex",justifyContent:"space-between"}}>
+          <span style={{color:C.muted}}>Total feed cost</span>
+          <span style={{color:C.amber,fontWeight:700}}>{fmtRWF(wFeeds.reduce((s,f)=>s+(f.cost||0),0))}</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",marginTop:6}}>
+          <span style={{color:C.muted}}>Total feed used</span>
+          <span style={{color:C.amber,fontWeight:700}}>{wFeeds.reduce((s,f)=>s+(f.kg||0),0).toFixed(1)} kg</span>
+        </div>
+      </div>}
+    </div>)}
+
+    {/* Sales tab */}
+    {tab==="sales"&&(<div>
+      {wSales.length===0&&<div style={{...S.card,color:C.faint,fontSize:13,textAlign:"center"}}>No sales found.</div>}
+      {wSales.slice().reverse().map((s,i)=>{
+        const pig=pigs.find(p=>p.id===s.pigId);
+        return(<div key={i} style={S.card}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+            <div>
+              <div style={{fontWeight:700,color:C.text}}>{s.worker}</div>
+              <div style={{fontSize:11,color:C.faint}}>{s.date} · Pig: {pig?pig.tag:"—"} · Buyer: {s.buyer||"—"}</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontWeight:700,color:"#10b981",fontSize:15}}>{fmtRWF(s.total)}</div>
+              <div style={{fontSize:11,color:C.muted}}>{s.weight||0}kg @ RWF{fmtNum(s.priceKg)}/kg</div>
+            </div>
+          </div>
+          {s.notes&&<div style={{fontSize:11,color:C.faint,fontStyle:"italic"}}>"{s.notes}"</div>}
+        </div>);
+      })}
+      {wSales.length>0&&<div style={{...S.card,background:"rgba(16,185,129,.05)",border:"1px solid rgba(16,185,129,.2)"}}>
+        <div style={{display:"flex",justifyContent:"space-between"}}>
+          <span style={{color:C.muted}}>Total revenue from {wSales.length} sale(s)</span>
+          <span style={{color:"#10b981",fontWeight:800,fontSize:15}}>{fmtRWF(wSales.reduce((s,x)=>s+(x.total||0),0))}</span>
+        </div>
+      </div>}
+    </div>)}
+  </div>);
+}
+
 /* ─── Worker Views ─── */
 function WHome({user,logs,feeds,sales,messages}){
   const ml=logs.filter(l=>l.workerId===user.id);
@@ -2415,7 +2566,7 @@ function DEntry({user,pigs,logs,setLogs}){
       ))}
     </div>
     <div style={{marginBottom:12}}><label style={S.lbl}>Notes</label><textarea rows={3} value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="Any observations..." style={{...S.inp,resize:"vertical"}}/></div>
-    <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={()=>{setLogs(p=>[...p,{...form,id:uid(),workerId:user.id,worker:user.name,date:toDay()}]);setDone(true);}}>Submit Report →</button>
+    <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={()=>{const newLog={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay()};setLogs(p=>[...p,newLog]);fsAppend("logs",[newLog]);setDone(true);}}>Submit Report →</button>
   </div></div>);
 }
 
@@ -2423,7 +2574,7 @@ function FEntry({user,pigs,feeds,setFeeds}){
   const [form,setForm]=useState({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});
   const [saved,setSaved]=useState(false);
   const active=pigs.filter(p=>p.status==="active");
-  function submit(){if(!form.kg||!form.cost)return;setFeeds(p=>[...p,{...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg:parseFloat(form.kg),cost:parseFloat(form.cost)}]);setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});},2000);}
+  function submit(){if(!form.kg||!form.cost)return;const newFeed={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg:parseFloat(form.kg),cost:parseFloat(form.cost)};setFeeds(p=>[...p,newFeed]);fsAppend("feeds",[newFeed]);setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});},2000);}
   return(<div style={{maxWidth:490}}><div style={S.h1}>Log Feeding</div>
     {saved&&<div style={{padding:10,background:C.accentSoft,borderRadius:7,marginBottom:12,color:C.accent,fontSize:13}}>✓ Saved!</div>}
     <div style={S.card}>
@@ -2444,7 +2595,7 @@ function SEntry({user,pigs,setPigs,sales,setSales}){
   const [saved,setSaved]=useState(false);
   const active=pigs.filter(p=>p.status==="active");
   function upd(f){return f.weight&&f.priceKg?{...f,total:(parseFloat(f.weight)*parseFloat(f.priceKg)).toString()}:f;}
-  function submit(){if(!form.total)return;setSales(p=>[...p,{...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:parseFloat(form.total)}]);if(form.pigId)setPigs(p=>p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig));setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",buyer:"",weight:"",priceKg:"",total:"",notes:""});},2000);}
+  function submit(){if(!form.total)return;const newSale={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:parseFloat(form.total)};setSales(p=>[...p,newSale]);fsAppend("sales",[newSale]);if(form.pigId)setPigs(p=>p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig));setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",buyer:"",weight:"",priceKg:"",total:"",notes:""});},2000);}
   return(<div style={{maxWidth:490}}><div style={S.h1}>Log a Sale</div>
     {saved&&<div style={{padding:10,background:C.accentSoft,borderRadius:7,marginBottom:12,color:C.accent,fontSize:13}}>✓ Sale recorded!</div>}
     <div style={S.card}>
