@@ -127,8 +127,10 @@ async function getOnlineUsers(){
 }
 async function setOnlineUsers(users){
   try{
-    await db.collection("farmiq").doc("users").set({list:users,updatedAt:new Date().toISOString()});
-  }catch(e){console.error("Firebase setUsers error",e);}
+    const p=db.collection("farmiq").doc("users").set({list:users,updatedAt:new Date().toISOString()});
+    const timeout=new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),8000));
+    await Promise.race([p,timeout]);
+  }catch(e){console.error("Firebase setUsers error",e);throw e;}
 }
 async function getOnlineSession(){
   try{
@@ -1668,7 +1670,11 @@ function App(){
     db.collection("farmiq").doc("remoteSessions").set({list:sessions,updatedAt:new Date().toISOString()});
   },[sessions,sessionsLoaded]);
 
-  if(!sessionLoaded||!usersLoaded||!sessionsLoaded||!pigsLoaded||!feedsLoaded||!salesLoaded||!logsLoaded||!expensesLoaded||!incomesLoaded||!messagesLoaded||!reproLoaded||!stockLoaded) return(<div style={{minHeight:"100vh",background:"linear-gradient(135deg,#0f2318 0%,#1a3a2a 100%)",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
+  // Timeout fallback — if Firebase takes too long, show app anyway
+  const [forceShow,setForceShow]=useState(false);
+  useEffect(()=>{const t=setTimeout(()=>setForceShow(true),6000);return()=>clearTimeout(t);},[]);
+
+  if(!forceShow&&(!sessionLoaded||!usersLoaded||!sessionsLoaded||!pigsLoaded||!feedsLoaded||!salesLoaded||!logsLoaded||!expensesLoaded||!incomesLoaded||!messagesLoaded||!reproLoaded||!stockLoaded)) return(<div style={{minHeight:"100vh",background:"linear-gradient(135deg,#0f2318 0%,#1a3a2a 100%)",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
     <div style={{width:56,height:56,borderRadius:16,background:"rgba(74,222,128,.12)",border:"1px solid rgba(74,222,128,.25)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:26}}>🐷</div>
     <div style={{color:"#4ade80",fontSize:14,fontWeight:600,letterSpacing:2}}>LOADING FARMIQ…</div>
     <div style={{width:120,height:3,background:"rgba(255,255,255,.1)",borderRadius:3,overflow:"hidden"}}><div style={{width:"60%",height:"100%",background:"#4ade80",borderRadius:3,animation:"spin 1s linear infinite"}}/></div>
@@ -1795,14 +1801,15 @@ function Login({users,setUsers,setUser}){
     const updated=[...users,newUser];
     try{
       await setOnlineUsers(updated);
-      setUsers(updated);
-      setOk("Account created! An admin must approve your access before you can sign in.");
-      setErr("");
-      setTab("login");
-      setForm({name:"",username:"",password:"",confirmPassword:""});
     }catch(e){
-      setErr("Connection error. Please check your internet and try again.");
+      console.error("reg error",e);
     }
+    // Always succeed locally even if Firebase is slow
+    setUsers(updated);
+    setOk("Account created! An admin must approve your access before you can sign in.");
+    setErr("");
+    setTab("login");
+    setForm({name:"",username:"",password:"",confirmPassword:""});
     setLoading(false);
   }
 
