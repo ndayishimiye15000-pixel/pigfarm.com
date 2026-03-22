@@ -183,16 +183,16 @@ async function askAI(prompt,farmData){
   try{
     const ctrl=new AbortController();
     const t=setTimeout(()=>ctrl.abort(),30000);
-    const r=await fetch("https://api.anthropic.com/v1/messages",{
+    const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,{
       method:"POST",signal:ctrl.signal,
-      headers:{"Content-Type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-      body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1200,messages:[{role:"user",content:prompt}]})
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:1200}})
     });
     clearTimeout(t);
-    if(r.status===401) return{text:"__AUTH_ERROR__",source:"auth_error"};
+    if(r.status===400||r.status===403) return{text:"__AUTH_ERROR__",source:"auth_error"};
     if(!r.ok){const err=await r.json().catch(()=>({}));return{text:`__API_ERROR__:${err?.error?.message||r.status}`,source:"api_error"};}
     const d=await r.json();
-    const txt=d.content?.[0]?.text;
+    const txt=d.candidates?.[0]?.content?.parts?.[0]?.text;
     if(txt) return{text:txt,source:"ai"};
     return{text:"__EMPTY__",source:"empty"};
   }catch(e){
@@ -348,7 +348,7 @@ function ApiKeyModal({onClose}){
       <div style={{fontSize:17,fontWeight:700,color:C.text,marginBottom:4}}>🔑 Anthropic API Key</div>
       <div style={{fontSize:12,color:C.faint,marginBottom:16,lineHeight:1.6}}>
         Your key is stored only in this browser (localStorage) and sent directly to the Anthropic API. It never goes through any third-party server.
-        <br/><a href="https://console.anthropic.com/" target="_blank" rel="noreferrer" style={{color:C.accent}}>Get your key at console.anthropic.com →</a>
+        <br/><a href="https://aistudio.google.com/app/apikey/" target="_blank" rel="noreferrer" style={{color:C.accent}}>Get your free key at aistudio.google.com →</a>
       </div>
       <input value={val} onChange={e=>setVal(e.target.value)} placeholder="sk-ant-..." type="password" style={{...{background:"#fff",border:"1px solid #cbd5e1",color:C.text,borderRadius:8,padding:"10px 13px",width:"100%",fontSize:13,outline:"none",boxSizing:"border-box",fontFamily:"inherit"},marginBottom:12}}/>
       {saved&&<div style={{padding:"8px 12px",background:C.accentSoft,border:"1px solid rgba(22,163,74,.3)",borderRadius:7,fontSize:13,color:C.accent,marginBottom:10}}>✅ Key saved! AI is now active.</div>}
@@ -366,7 +366,7 @@ function AIStatusPill({onSetKey}){
   const hasKey=!!getApiKey();
   return(<button onClick={onSetKey} title={hasKey?"AI active — click to manage key":"Set API key to enable AI"} style={{padding:"3px 10px",borderRadius:20,border:"1px solid "+(hasKey?"rgba(22,163,74,.4)":"rgba(245,158,11,.5)"),background:hasKey?C.accentSoft:"rgba(245,158,11,.07)",color:hasKey?C.accent:C.amber,fontSize:10,cursor:"pointer",fontWeight:700,fontFamily:"inherit",display:"flex",alignItems:"center",gap:5}}>
     <span style={{width:6,height:6,borderRadius:"50%",background:hasKey?C.accent:C.amber,display:"inline-block"}}/>
-    {hasKey?"✦ AI Online":"🔑 Set API Key"}
+    {hasKey?"✦ AI Online":"🔑 Set Gemini API Key"}
   </button>);
 }
 
@@ -446,7 +446,7 @@ function AIAdvisor({pigs,feeds,sales,logs,expenses,incomes,reproductions,stock})
     </div>
 
     {!hasKey&&<div style={{padding:"13px 16px",background:"rgba(245,158,11,.07)",border:"1px solid rgba(245,158,11,.3)",borderRadius:10,marginBottom:14,fontSize:13,color:C.amber}}>
-      🔑 Add your Anthropic API key to enable live AI answers. <button onClick={()=>setShowKeyModal(true)} style={{background:"none",border:"none",color:C.accent,cursor:"pointer",fontWeight:700,fontSize:13,padding:0,fontFamily:"inherit",textDecoration:"underline"}}>Set API Key →</button>
+      🔑 Add your Anthropic API key to enable live AI answers. <button onClick={()=>setShowKeyModal(true)} style={{background:"none",border:"none",color:C.accent,cursor:"pointer",fontWeight:700,fontSize:13,padding:0,fontFamily:"inherit",textDecoration:"underline"}}>Set Gemini API Key →</button>
     </div>}
 
     <div style={{...S.card,display:"flex",flexDirection:"column"}}>
@@ -1659,15 +1659,8 @@ function App(){
   },[]);
 
   // Save to Firestore whenever data changes (after initial load)
-  useEffect(()=>{if(pigsLoaded)     fsSet("pigs",pigs);},[pigs,pigsLoaded]);
-  useEffect(()=>{if(feedsLoaded)    fsSet("feeds",feeds);},[feeds,feedsLoaded]);
-  useEffect(()=>{if(salesLoaded)    fsSet("sales",sales);},[sales,salesLoaded]);
-  useEffect(()=>{if(logsLoaded)     fsSet("logs",logs);},[logs,logsLoaded]);
-  useEffect(()=>{if(expensesLoaded) fsSet("expenses",expenses);},[expenses,expensesLoaded]);
-  useEffect(()=>{if(incomesLoaded)  fsSet("incomes",incomes);},[incomes,incomesLoaded]);
-  useEffect(()=>{if(messagesLoaded) fsSet("messages",messages);},[messages,messagesLoaded]);
-  useEffect(()=>{if(reproLoaded)    fsSet("reproductions",reproductions);},[reproductions,reproLoaded]);
-  useEffect(()=>{if(stockLoaded)    fsSet("stock",stock);},[stock,stockLoaded]);
+  // Farm data is saved directly via fsSet() when user makes changes
+  // Auto-sync removed to prevent stale overwrites across devices
 
   // Firestore real-time listener for remote work sessions
   useEffect(()=>{
@@ -1738,7 +1731,7 @@ function App(){
       <div style={{padding:"8px 14px 6px",flexShrink:0}}>
         <button onClick={()=>setShowApiModal(true)} style={{width:"100%",padding:"7px 11px",borderRadius:8,border:"1px solid "+(getApiKey()?"rgba(74,222,128,.3)":"rgba(245,158,11,.4)"),background:getApiKey()?"rgba(74,222,128,.08)":"rgba(245,158,11,.07)",color:getApiKey()?"#4ade80":"#fbbf24",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600,display:"flex",alignItems:"center",gap:7,justifyContent:"center"}}>
           <span style={{width:7,height:7,borderRadius:"50%",background:getApiKey()?"#4ade80":"#fbbf24",flexShrink:0}}/>
-          {getApiKey()?"✦ AI Online · Claude":"🔑 Set API Key"}
+          {getApiKey()?"✦ AI Online · Gemini":"🔑 Set Gemini API Key"}
         </button>
       </div>
       {nav.map(n=><button key={n.id} style={S.nb(page===n.id)} onClick={()=>setPage(n.id)}>{n.l}</button>)}
@@ -2356,7 +2349,7 @@ function DEntry({user,pigs,logs,setLogs}){
       ))}
     </div>
     <div style={{marginBottom:12}}><label style={S.lbl}>Notes</label><textarea rows={3} value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="Any observations..." style={{...S.inp,resize:"vertical"}}/></div>
-    <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={()=>{setLogs(p=>[...p,{...form,id:uid(),workerId:user.id,worker:user.name,date:toDay()}]);setDone(true);}}>Submit Report →</button>
+    <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={async()=>{const newLog={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay()};const updated=[...logs,newLog];setLogs(updated);try{await fsSet("logs",updated);}catch(e){}setDone(true);}}>Submit Report →</button>
   </div></div>);
 }
 
@@ -2364,7 +2357,7 @@ function FEntry({user,pigs,feeds,setFeeds}){
   const [form,setForm]=useState({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});
   const [saved,setSaved]=useState(false);
   const active=pigs.filter(p=>p.status==="active");
-  function submit(){if(!form.kg||!form.cost)return;setFeeds(p=>[...p,{...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg:parseFloat(form.kg),cost:parseFloat(form.cost)}]);setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});},2000);}
+  async function submit(){if(!form.kg||!form.cost)return;const newFeed={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg:parseFloat(form.kg),cost:parseFloat(form.cost)};const updated=[...feeds,newFeed];setFeeds(updated);try{await fsSet("feeds",updated);}catch(e){}setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});},2000);}
   return(<div style={{maxWidth:490}}><div style={S.h1}>Log Feeding</div>
     {saved&&<div style={{padding:10,background:C.accentSoft,borderRadius:7,marginBottom:12,color:C.accent,fontSize:13}}>✓ Saved!</div>}
     <div style={S.card}>
@@ -2385,7 +2378,7 @@ function SEntry({user,pigs,setPigs,sales,setSales}){
   const [saved,setSaved]=useState(false);
   const active=pigs.filter(p=>p.status==="active");
   function upd(f){return f.weight&&f.priceKg?{...f,total:(parseFloat(f.weight)*parseFloat(f.priceKg)).toString()}:f;}
-  function submit(){if(!form.total)return;setSales(p=>[...p,{...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:parseFloat(form.total)}]);if(form.pigId)setPigs(p=>p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig));setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",buyer:"",weight:"",priceKg:"",total:"",notes:""});},2000);}
+  async function submit(){if(!form.total)return;const newSale={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:parseFloat(form.total)};const updatedSales=[...sales,newSale];setSales(updatedSales);try{await fsSet("sales",updatedSales);}catch(e){}if(form.pigId){const updatedPigs=pigs.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig);setPigs(updatedPigs);try{await fsSet("pigs",updatedPigs);}catch(e){}}setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",buyer:"",weight:"",priceKg:"",total:"",notes:""});},2000);}
   return(<div style={{maxWidth:490}}><div style={S.h1}>Log a Sale</div>
     {saved&&<div style={{padding:10,background:C.accentSoft,borderRadius:7,marginBottom:12,color:C.accent,fontSize:13}}>✓ Sale recorded!</div>}
     <div style={S.card}>
