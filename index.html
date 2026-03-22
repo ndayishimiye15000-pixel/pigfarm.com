@@ -1604,20 +1604,20 @@ function App(){
       if(s) setUser(s);
       setSessionLoaded(true);
     });
-    // Real-time listener on Firestore users doc
-    const unsub=db.collection("farmiq").doc("users").onSnapshot(doc=>{
+    // Real-time listener on Firestore users doc — keeps admin in sync when workers register
+    const unsub=db.collection("farmiq").doc("users").onSnapshot({includeMetadataChanges:false},doc=>{
       if(doc.exists&&doc.data().list){
         const fresh=doc.data().list;
-        setUsers(fresh);
+        // Force update — replaces local state with latest Firebase data
+        setUsers([...fresh]);
       } else {
         // First time — seed admin
         setOnlineUsers(INIT_USERS);
-        setUsers(INIT_USERS);
+        setUsers([...INIT_USERS]);
       }
       setUsersLoaded(true);
     },err=>{
       console.error("Firestore listener error",err);
-      // Fallback to local
       setUsersLoaded(true);
     });
     return()=>unsub();
@@ -1821,23 +1821,26 @@ function Login({users,setUsers,setUser}){
     if(form.password.length<6) return setErr("Password must be at least 6 characters.");
     if(form.password!==form.confirmPassword) return setErr("Passwords do not match.");
     setLoading(true);
-    if(users.find(u=>u.username.toLowerCase()===form.username.toLowerCase())){
-      setLoading(false);
-      return setErr("That username is already taken.");
-    }
-    const newUser={id:uid(),name:form.name.trim(),username:form.username.trim(),password:form.password,role:"worker",approved:false};
-    const updated=[...users,newUser];
     try{
+      // Always fetch FRESH users from Firebase before saving to avoid stale overwrites
+      let freshUsers=await getOnlineUsers();
+      if(!freshUsers||freshUsers.length===0) freshUsers=users;
+      if(freshUsers.find(u=>u.username.toLowerCase()===form.username.toLowerCase())){
+        setLoading(false);
+        return setErr("That username is already taken.");
+      }
+      const newUser={id:uid(),name:form.name.trim(),username:form.username.trim(),password:form.password,role:"worker",approved:false};
+      const updated=[...freshUsers,newUser];
       await setOnlineUsers(updated);
+      setUsers(updated);
+      setOk("Account created! An admin must approve your access before you can sign in.");
+      setErr("");
+      setTab("login");
+      setForm({name:"",username:"",password:"",confirmPassword:""});
     }catch(e){
       console.error("reg error",e);
+      setErr("Registration failed. Please check your connection and try again.");
     }
-    // Always succeed locally even if Firebase is slow
-    setUsers(updated);
-    setOk("Account created! An admin must approve your access before you can sign in.");
-    setErr("");
-    setTab("login");
-    setForm({name:"",username:"",password:"",confirmPassword:""});
     setLoading(false);
   }
 
