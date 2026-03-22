@@ -1624,7 +1624,7 @@ function App(){
   },[]);
 
   // Persist users online whenever they change (after load)
-  useEffect(()=>{if(usersLoaded) setOnlineUsers(users);},[users,usersLoaded]);
+  // Removed auto-sync: was overwriting new registrations due to stale state race condition
   // Persist session online
   useEffect(()=>{if(sessionLoaded) setOnlineSession(user);},[user,sessionLoaded]);
 
