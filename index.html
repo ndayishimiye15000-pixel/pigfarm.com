@@ -167,13 +167,11 @@ async function fsSet(key,list){
 // This fixes the race condition where admin and worker overwrite each other.
 async function fsAppend(key,newItems){
   const ref=db.collection("farmiq").doc(key);
-  try{
-    const doc=await ref.get();
-    const existing=(doc.exists&&doc.data().list)||[];
-    const newIds=new Set(newItems.map(x=>x.id));
-    const merged=[...existing.filter(x=>!newIds.has(x.id)),...newItems];
-    await ref.set({list:merged,updatedAt:new Date().toISOString()});
-  }catch(e){console.error("fsAppend error",key,e);}
+  const doc=await ref.get();
+  const existing=(doc.exists&&doc.data().list)||[];
+  const newIds=new Set(newItems.map(x=>x.id));
+  const merged=[...existing.filter(x=>!newIds.has(x.id)),...newItems];
+  await ref.set({list:merged,updatedAt:new Date().toISOString()});
 }
 
 // fsListen: real-time listener. Stores last snapshot JSON in lastRemoteRef
@@ -2566,7 +2564,7 @@ function DEntry({user,pigs,logs,setLogs}){
       ))}
     </div>
     <div style={{marginBottom:12}}><label style={S.lbl}>Notes</label><textarea rows={3} value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="Any observations..." style={{...S.inp,resize:"vertical"}}/></div>
-    <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={()=>{const newLog={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay()};setLogs(p=>[...p,newLog]);fsAppend("logs",[newLog]);setDone(true);}}>Submit Report →</button>
+    <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={async()=>{const newLog={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay()};setLogs(p=>[...p,newLog]);try{await fsAppend("logs",[newLog]);setDone(true);}catch(e){alert("❌ Failed to save! Check your internet connection and try again.");}}}>Submit Report →</button>
   </div></div>);
 }
 
@@ -2574,7 +2572,7 @@ function FEntry({user,pigs,feeds,setFeeds}){
   const [form,setForm]=useState({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});
   const [saved,setSaved]=useState(false);
   const active=pigs.filter(p=>p.status==="active");
-  function submit(){if(!form.kg||!form.cost)return;const newFeed={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg:parseFloat(form.kg),cost:parseFloat(form.cost)};setFeeds(p=>[...p,newFeed]);fsAppend("feeds",[newFeed]);setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});},2000);}
+  async function submit(){if(!form.kg||!form.cost)return;const newFeed={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg:parseFloat(form.kg),cost:parseFloat(form.cost)};setFeeds(p=>[...p,newFeed]);try{await fsAppend("feeds",[newFeed]);setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});},2000);}catch(e){alert("❌ Failed to save! Check your internet and try again.");}}
   return(<div style={{maxWidth:490}}><div style={S.h1}>Log Feeding</div>
     {saved&&<div style={{padding:10,background:C.accentSoft,borderRadius:7,marginBottom:12,color:C.accent,fontSize:13}}>✓ Saved!</div>}
     <div style={S.card}>
@@ -2595,7 +2593,7 @@ function SEntry({user,pigs,setPigs,sales,setSales}){
   const [saved,setSaved]=useState(false);
   const active=pigs.filter(p=>p.status==="active");
   function upd(f){return f.weight&&f.priceKg?{...f,total:(parseFloat(f.weight)*parseFloat(f.priceKg)).toString()}:f;}
-  function submit(){if(!form.total)return;const newSale={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:parseFloat(form.total)};setSales(p=>[...p,newSale]);fsAppend("sales",[newSale]);if(form.pigId)setPigs(p=>p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig));setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",buyer:"",weight:"",priceKg:"",total:"",notes:""});},2000);}
+  async function submit(){if(!form.total)return;const newSale={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:parseFloat(form.total)};setSales(p=>[...p,newSale]);try{await fsAppend("sales",[newSale]);if(form.pigId)setPigs(p=>p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig));setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",buyer:"",weight:"",priceKg:"",total:"",notes:""});},2000);}catch(e){alert("❌ Sale not saved! Check internet and try again.");}
   return(<div style={{maxWidth:490}}><div style={S.h1}>Log a Sale</div>
     {saved&&<div style={{padding:10,background:C.accentSoft,borderRadius:7,marginBottom:12,color:C.accent,fontSize:13}}>✓ Sale recorded!</div>}
     <div style={S.card}>
