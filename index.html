@@ -1740,6 +1740,34 @@ function App(){
       </div>
     </div>
     <div style={S.main}>
+      {/* Real-time pending worker alert banner for admin */}
+      {isAdmin&&pending.length>0&&page!=="workers"&&(
+        <div style={{
+          display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10,
+          padding:"12px 16px",marginBottom:16,
+          background:"linear-gradient(135deg,rgba(245,158,11,.15),rgba(245,158,11,.08))",
+          border:"1.5px solid rgba(245,158,11,.5)",borderRadius:12,
+          animation:"pulse 2s ease-in-out infinite"
+        }}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:22}}>🔔</span>
+            <div>
+              <div style={{fontWeight:700,color:"#92400e",fontSize:14}}>
+                {pending.length} Worker{pending.length>1?"s":""} Waiting for Approval
+              </div>
+              <div style={{fontSize:12,color:"#b45309",marginTop:2}}>
+                {pending.map(w=>w.name).join(", ")} registered and need{pending.length===1?"s":""} your approval to log in.
+              </div>
+            </div>
+          </div>
+          <button onClick={()=>setPage("workers")} style={{
+            padding:"9px 18px",borderRadius:9,border:"none",cursor:"pointer",
+            background:"linear-gradient(135deg,#d97706,#b45309)",
+            color:"#fff",fontWeight:700,fontSize:13,fontFamily:"inherit",
+            boxShadow:"0 2px 8px rgba(180,83,9,.4)",whiteSpace:"nowrap"
+          }}>✓ Review Now →</button>
+        </div>
+      )}
       {isAdmin&&page==="home"&&<AHome pigs={pigs} feeds={feeds} sales={sales} logs={logs} users={users} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} allData={allData} setPage={setPage}/>}
       {isAdmin&&page==="ai"&&<AIAdvisor pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
       {isAdmin&&page==="pnl"&&<ProfitLossAnalysis pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} allData={allData}/>}
@@ -2166,27 +2194,52 @@ function DLogs({logs,pigs,feeds,sales,expenses,incomes,allData}){
 
 /* ─── Workers ─── */
 function Workers({users,setUsers}){
+  const [saving,setSaving]=React.useState(null);
   const pending=users.filter(u=>u.role==="worker"&&!u.approved);
   const approved=users.filter(u=>u.role==="worker"&&u.approved);
+
+  async function approve(id){
+    setSaving(id);
+    const updated=users.map(u=>u.id===id?{...u,approved:true}:u);
+    setUsers(updated);
+    try{await setOnlineUsers(updated);}catch(e){console.error("approve error",e);}
+    setSaving(null);
+  }
+  async function reject(id){
+    setSaving(id);
+    const updated=users.filter(u=>u.id!==id);
+    setUsers(updated);
+    try{await setOnlineUsers(updated);}catch(e){console.error("reject error",e);}
+    setSaving(null);
+  }
+  async function removeWorker(id){
+    setSaving(id);
+    const updated=users.filter(u=>u.id!==id);
+    setUsers(updated);
+    try{await setOnlineUsers(updated);}catch(e){console.error("remove error",e);}
+    setSaving(null);
+  }
+
   return(<div>
     <div style={S.h1}>Worker Management</div>
-    <div style={S.sub}>{approved.length} active · {pending.length} pending</div>
+    <div style={S.sub}>{approved.length} active · {pending.length} pending approval</div>
     {pending.length>0&&<div style={S.card}>
-      <div style={{fontSize:13,fontWeight:700,color:C.amber,marginBottom:10}}>⏳ Pending Approval</div>
+      <div style={{fontSize:13,fontWeight:700,color:C.amber,marginBottom:10}}>⏳ Pending Approval ({pending.length})</div>
       {pending.map(w=><div key={w.id} style={{...S.row,background:"rgba(245,158,11,.05)"}}>
         <div><div style={{fontWeight:600}}>{w.name}</div><div style={{fontSize:11,color:C.faint}}>@{w.username}</div></div>
         <div>
-          <button style={S.btn("#166534")} onClick={()=>setUsers(p=>p.map(u=>u.id===w.id?{...u,approved:true}:u))}>✓ Approve</button>
-          <button style={S.btn("#991b1b")} onClick={()=>setUsers(p=>p.filter(u=>u.id!==w.id))}>✗ Reject</button>
+          <button style={S.btn("#166534")} disabled={saving===w.id} onClick={()=>approve(w.id)}>{saving===w.id?"⏳":"✓ Approve"}</button>
+          <button style={S.btn("#991b1b")} disabled={saving===w.id} onClick={()=>reject(w.id)}>{saving===w.id?"⏳":"✗ Reject"}</button>
         </div>
       </div>)}
     </div>}
+    {pending.length===0&&<div style={{...S.card,textAlign:"center",color:C.faint,fontSize:13}}>✅ No pending approvals.</div>}
     <div style={S.card}>
-      <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:10}}>✅ Active Workers</div>
+      <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:10}}>✅ Active Workers ({approved.length})</div>
       {approved.length===0&&<div style={{color:C.faint,fontSize:13}}>No workers yet.</div>}
       {approved.map(w=><div key={w.id} style={S.row}>
         <div><div style={{fontWeight:600}}>{w.name}</div><div style={{fontSize:11,color:C.faint}}>@{w.username}</div></div>
-        <button style={{...S.btn(C.red),padding:"5px 11px",fontSize:11}} onClick={()=>setUsers(p=>p.filter(u=>u.id!==w.id))}>Remove</button>
+        <button style={{...S.btn(C.red),padding:"5px 11px",fontSize:11}} disabled={saving===w.id} onClick={()=>removeWorker(w.id)}>{saving===w.id?"⏳":"Remove"}</button>
       </div>)}
     </div>
   </div>);
