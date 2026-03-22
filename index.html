@@ -127,9 +127,7 @@ async function getOnlineUsers(){
 }
 async function setOnlineUsers(users){
   try{
-    const p=db.collection("farmiq").doc("users").set({list:users,updatedAt:new Date().toISOString()});
-    const timeout=new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),8000));
-    await Promise.race([p,timeout]);
+    await db.collection("farmiq").doc("users").set({list:users,updatedAt:new Date().toISOString()});
   }catch(e){console.error("Firebase setUsers error",e);throw e;}
 }
 async function getOnlineSession(){
@@ -1846,7 +1844,11 @@ function Login({users,setUsers,setUser}){
       }
       const newUser={id:uid(),name:form.name.trim(),username:form.username.trim(),password:form.password,role:"worker",approved:false};
       const updated=[...freshUsers,newUser];
-      await setOnlineUsers(updated);
+      try{
+        await setOnlineUsers(updated);
+      }catch(e){
+        console.error("Firebase save failed, saved locally only",e);
+      }
       setUsers(updated);
       setOk("Account created! An admin must approve your access before you can sign in.");
       setErr("");
@@ -1854,7 +1856,7 @@ function Login({users,setUsers,setUser}){
       setForm({name:"",username:"",password:"",confirmPassword:""});
     }catch(e){
       console.error("reg error",e);
-      setErr("Registration failed. Please check your internet connection and try again.");
+      setErr("Something went wrong. Please try again.");
     }
     setLoading(false);
   }
