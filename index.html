@@ -209,23 +209,23 @@ function fsListen(key,setter,setLoaded,fallback){
 function getApiKey(){return localStorage.getItem("fiq_apikey")||"";}
 function setApiKey(k){localStorage.setItem("fiq_apikey",k);}
 
-/* ─── AI helper — Gemini API (Free) ─── */
+/* ─── AI helper — Groq API (Free) ─── */
 async function askAI(prompt,farmData){
   const key=getApiKey();
   if(!key) return{text:"__NO_KEY__",source:"no_key"};
   try{
     const ctrl=new AbortController();
     const t=setTimeout(()=>ctrl.abort(),30000);
-    const r=await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key="+key,{
+    const r=await fetch("https://api.groq.com/openai/v1/chat/completions",{
       method:"POST",signal:ctrl.signal,
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:1200}})
+      headers:{"Content-Type":"application/json","Authorization":"Bearer "+key},
+      body:JSON.stringify({model:"llama-3.1-8b-instant",max_tokens:1200,messages:[{role:"user",content:prompt}]})
     });
     clearTimeout(t);
-    if(r.status===400||r.status===403) return{text:"__AUTH_ERROR__",source:"auth_error"};
+    if(r.status===401||r.status===403) return{text:"__AUTH_ERROR__",source:"auth_error"};
     if(!r.ok){const err=await r.json().catch(()=>({}));return{text:`__API_ERROR__:${err?.error?.message||r.status}`,source:"api_error"};}
     const d=await r.json();
-    const txt=d.candidates?.[0]?.content?.parts?.[0]?.text;
+    const txt=d.choices?.[0]?.message?.content;
     if(txt) return{text:txt,source:"ai"};
     return{text:"__EMPTY__",source:"empty"};
   }catch(e){
@@ -378,10 +378,10 @@ function ApiKeyModal({onClose}){
   function save(){if(!val.trim())return;setApiKey(val.trim());setSaved(true);setTimeout(()=>{setSaved(false);onClose();},1200);}
   return(<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>e.target===e.currentTarget&&onClose()}>
     <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28,width:420,boxShadow:"0 20px 60px rgba(0,0,0,.2)"}}>
-      <div style={{fontSize:17,fontWeight:700,color:C.text,marginBottom:4}}>🔑 Gemini API Key (Free)</div>
+      <div style={{fontSize:17,fontWeight:700,color:C.text,marginBottom:4}}>🔑 Groq API Key (Free)</div>
       <div style={{fontSize:12,color:C.faint,marginBottom:16,lineHeight:1.6}}>
-        Your free Gemini key is stored only in this browser and sent directly to Google AI. It never goes through any third-party server.
-        <br/><a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{color:C.accent}}>Get your FREE key at aistudio.google.com →</a>
+        Your free Groq key is stored only in this browser and sent directly to Groq. It never goes through any third-party server.
+        <br/><a href="https://aistudio.Groq.com/app/apikey" target="_blank" rel="noreferrer" style={{color:C.accent}}>Get your FREE key at aistudio.Groq.com →</a>
       </div>
       <input value={val} onChange={e=>setVal(e.target.value)} placeholder="sk-ant-..." type="password" style={{...{background:"#fff",border:"1px solid #cbd5e1",color:C.text,borderRadius:8,padding:"10px 13px",width:"100%",fontSize:13,outline:"none",boxSizing:"border-box",fontFamily:"inherit"},marginBottom:12}}/>
       {saved&&<div style={{padding:"8px 12px",background:C.accentSoft,border:"1px solid rgba(22,163,74,.3)",borderRadius:7,fontSize:13,color:C.accent,marginBottom:10}}>✅ Key saved! AI is now active.</div>}
@@ -479,7 +479,7 @@ function AIAdvisor({pigs,feeds,sales,logs,expenses,incomes,reproductions,stock})
     </div>
 
     {!hasKey&&<div style={{padding:"13px 16px",background:"rgba(245,158,11,.07)",border:"1px solid rgba(245,158,11,.3)",borderRadius:10,marginBottom:14,fontSize:13,color:C.amber}}>
-      🔑 Add your free Gemini API key to enable AI. <button onClick={()=>setShowKeyModal(true)} style={{background:"none",border:"none",color:C.accent,cursor:"pointer",fontWeight:700,fontSize:13,padding:0,fontFamily:"inherit",textDecoration:"underline"}}>Set Gemini Key →</button>
+      🔑 Add your free Groq API key to enable AI. <button onClick={()=>setShowKeyModal(true)} style={{background:"none",border:"none",color:C.accent,cursor:"pointer",fontWeight:700,fontSize:13,padding:0,fontFamily:"inherit",textDecoration:"underline"}}>Set Groq Key →</button>
     </div>}
 
     <div style={{...S.card,display:"flex",flexDirection:"column"}}>
@@ -1314,7 +1314,7 @@ function AIMessages({users,messages,setMessages,pigs,feeds,sales,logs,expenses,i
   const [text,setText]=useState("");const [aiLoading,setAiLoading]=useState(false);const [sending,setSending]=useState(false);
   const workers=users.filter(u=>u.role==="worker"&&u.approved);
   async function generateMsg(){
-    if(!getApiKey()){setText("⚠️ Please set your Gemini API key (click the key button in the sidebar) to generate AI messages.");return;}
+    if(!getApiKey()){setText("⚠️ Please set your Groq API key (click the key button in the sidebar) to generate AI messages.");return;}
     setAiLoading(true);
     const totalInc=sales.reduce((s,l)=>s+(l.total||0),0)+incomes.reduce((s,l)=>s+(l.amount||0),0);
     const totalExp=feeds.reduce((s,l)=>s+(l.cost||0),0)+expenses.reduce((s,l)=>s+(l.amount||0),0);
@@ -1847,7 +1847,7 @@ function App(){
       <div style={{padding:"8px 14px 6px",flexShrink:0}}>
         <button onClick={()=>setShowApiModal(true)} style={{width:"100%",padding:"7px 11px",borderRadius:8,border:"1px solid "+(getApiKey()?"rgba(74,222,128,.3)":"rgba(245,158,11,.4)"),background:getApiKey()?"rgba(74,222,128,.08)":"rgba(245,158,11,.07)",color:getApiKey()?"#4ade80":"#fbbf24",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600,display:"flex",alignItems:"center",gap:7,justifyContent:"center"}}>
           <span style={{width:7,height:7,borderRadius:"50%",background:getApiKey()?"#4ade80":"#fbbf24",flexShrink:0}}/>
-          {getApiKey()?"✦ AI Online · Gemini":"🔑 Set Gemini Key"}
+          {getApiKey()?"✦ AI Online · Groq":"🔑 Set Groq Key"}
         </button>
       </div>
       {nav.map(n=><button key={n.id} style={S.nb(page===n.id)} onClick={()=>setPage(n.id)}>{n.l}</button>)}
