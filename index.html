@@ -58,6 +58,18 @@ const toDay=()=>new Date().toISOString().slice(0,10);
 const fmtRWF=(n)=>"RWF "+Math.round(n||0).toLocaleString();
 const fmtNum=(n)=>Math.round(n||0).toLocaleString();
 
+/* ─── Capital Helpers ─── */
+function calcCapitalBalance(capital){
+  const initial=capital.initial||0;
+  const txTotal=(capital.transactions||[]).reduce((s,t)=>t.type==="income"?s+t.amount:s-t.amount,0);
+  return initial+txTotal;
+}
+function capitalTx(capital,setCapital,{type,category,amount,description,date}){
+  const tx={id:Math.random().toString(36).slice(2,10),type,category,amount:parseFloat(amount)||0,description:description||"",date:date||new Date().toISOString().slice(0,10),createdAt:new Date().toISOString()};
+  setCapital(prev=>({...prev,transactions:[...(prev.transactions||[]),tx]}));
+  return tx;
+}
+
 /* ─── Initial Data ─── */
 const INIT_USERS=[{id:"a1",name:"Farm Owner",username:"admin",password:"admin123",role:"admin",approved:true}];
 const INIT_PIGS=[
@@ -1225,11 +1237,12 @@ function ProfitLossAnalysis({pigs,feeds,sales,logs,expenses,incomes,reproduction
 }
 
 /* ─── LEDGER ─── */
-function Ledger({expenses,setExpenses,incomes,setIncomes,feeds,sales}){
+function Ledger({expenses,setExpenses,incomes,setIncomes,feeds,sales,capital,setCapital}){
   const [tab,setTab]=useState("overview");
   const [eForm,setEForm]=useState({date:toDay(),category:"Feed Purchase",amount:"",description:""});
   const [iForm,setIForm]=useState({date:toDay(),category:"Pig Sale",amount:"",description:""});
   const [eSaved,setESaved]=useState(false);const [iSaved,setISaved]=useState(false);
+  const [editItem,setEditItem]=useState(null);
   const totalSaleInc=sales.reduce((s,l)=>s+(l.total||0),0);
   const totalOtherInc=incomes.reduce((s,l)=>s+(l.amount||0),0);
   const totalIncome=totalSaleInc+totalOtherInc;
@@ -1237,9 +1250,30 @@ function Ledger({expenses,setExpenses,incomes,setIncomes,feeds,sales}){
   const totalOtherExp=expenses.reduce((s,l)=>s+(l.amount||0),0);
   const totalExpense=totalFeedCost+totalOtherExp;
   const profit=totalIncome-totalExpense;
-  const allTx=[...sales.map(s=>({id:s.id,date:s.date,type:"income",cat:"Pig Sale",desc:`${s.buyer||"Buyer"} — ${s.weight||0}kg`,amount:s.total})),...incomes.map(i=>({...i,type:"income",cat:i.category})),...feeds.map(f=>({id:f.id,date:f.date,type:"expense",cat:"Feed Purchase",desc:`${f.feedType} ${f.kg}kg — ${f.worker}`,amount:f.cost})),...expenses.map(e=>({...e,type:"expense",cat:e.category}))].sort((a,b)=>(b.date||"").localeCompare(a.date||""));
-  function addExpense(){if(!eForm.amount)return;setExpenses(p=>[...p,{...eForm,id:uid(),amount:parseFloat(eForm.amount),worker:"Admin"}]);setESaved(true);setTimeout(()=>{setESaved(false);setEForm({date:toDay(),category:"Feed Purchase",amount:"",description:""});},2000);}
-  function addIncome(){if(!iForm.amount)return;setIncomes(p=>[...p,{...iForm,id:uid(),amount:parseFloat(iForm.amount),worker:"Admin"}]);setISaved(true);setTimeout(()=>{setISaved(false);setIForm({date:toDay(),category:"Pig Sale",amount:"",description:""});},2000);}
+  const allTx=[...sales.map(s=>({id:s.id,date:s.date,type:"income",cat:"Pig Sale",desc:`${s.buyer||"Buyer"} — ${s.weight||0}kg`,amount:s.total,src:"sale"})),...incomes.map(i=>({...i,type:"income",cat:i.category,src:"income",desc:i.description})),...feeds.map(f=>({id:f.id,date:f.date,type:"expense",cat:"Feed Purchase",desc:`${f.feedType} ${f.kg}kg — ${f.worker}`,amount:f.cost,src:"feed"})),...expenses.map(e=>({...e,type:"expense",cat:e.category,src:"expense",desc:e.description}))].sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+
+  function addExpense(){
+    if(!eForm.amount)return;
+    const newE={...eForm,id:uid(),amount:parseFloat(eForm.amount),worker:"Admin"};
+    setExpenses(p=>[...p,newE]);
+    if(setCapital) capitalTx(capital,setCapital,{type:"expense",category:eForm.category,amount:parseFloat(eForm.amount),description:eForm.description,date:eForm.date});
+    setESaved(true);setTimeout(()=>{setESaved(false);setEForm({date:toDay(),category:"Feed Purchase",amount:"",description:""});},2000);
+  }
+  function addIncome(){
+    if(!iForm.amount)return;
+    const newI={...iForm,id:uid(),amount:parseFloat(iForm.amount),worker:"Admin"};
+    setIncomes(p=>[...p,newI]);
+    if(setCapital) capitalTx(capital,setCapital,{type:"income",category:iForm.category,amount:parseFloat(iForm.amount),description:iForm.description,date:iForm.date});
+    setISaved(true);setTimeout(()=>{setISaved(false);setIForm({date:toDay(),category:"Pig Sale",amount:"",description:""});},2000);
+  }
+  function deleteIncome(id){setIncomes(p=>p.filter(i=>i.id!==id));}
+  function deleteExpense(id){setExpenses(p=>p.filter(e=>e.id!==id));}
+  function saveEdit(){
+    if(!editItem)return;
+    if(editItem.src==="income") setIncomes(p=>p.map(i=>i.id===editItem.id?{...i,...editItem}:i));
+    if(editItem.src==="expense") setExpenses(p=>p.map(e=>e.id===editItem.id?{...e,...editItem}:e));
+    setEditItem(null);
+  }
   return(<div>
     <div style={S.h1}>📒 Income & Expenses Ledger</div>
     <div style={S.sub}>Full financial record — all buying & selling activities</div>
@@ -1297,16 +1331,41 @@ function Ledger({expenses,setExpenses,incomes,setIncomes,feeds,sales}){
     {tab==="all"&&(<div style={S.card}>
       <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>All Transactions ({allTx.length})</div>
       {allTx.length===0&&<div style={{color:C.faint,fontSize:13}}>No transactions yet.</div>}
-      {allTx.map((tx,i)=>(<div key={i} style={{...S.row,flexWrap:"wrap",gap:4}}>
-        <div style={{flex:1}}>
-          <div style={{display:"flex",alignItems:"center",gap:7}}>
-            <span style={{fontSize:11,padding:"2px 7px",borderRadius:12,background:tx.type==="income"?"rgba(16,185,129,.12)":"rgba(239,68,68,.12)",color:tx.type==="income"?"#10b981":C.red,fontWeight:700}}>{tx.type==="income"?"↑ IN":"↓ OUT"}</span>
-            <span style={{color:C.text,fontWeight:600}}>{tx.cat}</span>
-          </div>
-          {tx.desc&&<div style={{fontSize:11,color:C.faint,marginTop:2,paddingLeft:38}}>{tx.desc}</div>}
+      {allTx.map((tx,i)=>(
+        <div key={i} style={{...S.row,flexWrap:"wrap",gap:4,borderBottom:"1px solid "+C.elevated,paddingBottom:8,marginBottom:8}}>
+          {editItem&&editItem.id===tx.id?(
+            <div style={{width:"100%"}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                <div><label style={S.lbl}>Amount (RWF)</label><input type="number" value={editItem.amount} onChange={e=>setEditItem({...editItem,amount:parseFloat(e.target.value)||0})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Date</label><input type="date" value={editItem.date} onChange={e=>setEditItem({...editItem,date:e.target.value})} style={S.inp}/></div>
+                <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Description</label><input value={editItem.desc||editItem.description||""} onChange={e=>setEditItem({...editItem,desc:e.target.value,description:e.target.value})} style={S.inp}/></div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={saveEdit} style={{...S.btn(C.accent),flex:1,padding:"7px",fontSize:12}}>✓ Save</button>
+                <button onClick={()=>setEditItem(null)} style={{...S.btn("#374151"),flex:1,padding:"7px",fontSize:12}}>Cancel</button>
+              </div>
+            </div>
+          ):(
+            <>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",alignItems:"center",gap:7}}>
+                  <span style={{fontSize:11,padding:"2px 7px",borderRadius:12,background:tx.type==="income"?"rgba(16,185,129,.12)":"rgba(239,68,68,.12)",color:tx.type==="income"?"#10b981":C.red,fontWeight:700}}>{tx.type==="income"?"↑ IN":"↓ OUT"}</span>
+                  <span style={{color:C.text,fontWeight:600}}>{tx.cat}</span>
+                </div>
+                {(tx.desc||tx.description)&&<div style={{fontSize:11,color:C.faint,marginTop:2,paddingLeft:38}}>{tx.desc||tx.description}</div>}
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontWeight:700,color:tx.type==="income"?"#10b981":C.red}}>{fmtRWF(tx.amount)}</div>
+                <div style={{fontSize:11,color:C.faint}}>{tx.date}</div>
+                {(tx.src==="income"||tx.src==="expense")&&<div style={{display:"flex",gap:5,marginTop:4,justifyContent:"flex-end"}}>
+                  <button onClick={()=>setEditItem({...tx})} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid "+C.border,background:"transparent",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>✏️</button>
+                  <button onClick={()=>{if(window.confirm("Delete this record?"))tx.src==="income"?deleteIncome(tx.id):deleteExpense(tx.id);}} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>
+                </div>}
+              </div>
+            </>
+          )}
         </div>
-        <div style={{textAlign:"right"}}><div style={{fontWeight:700,color:tx.type==="income"?"#10b981":C.red}}>{fmtRWF(tx.amount)}</div><div style={{fontSize:11,color:C.faint}}>{tx.date}</div></div>
-      </div>))}
+      ))}
     </div>)}
   </div>);
 }
@@ -1669,6 +1728,8 @@ function App(){
   const [stockLoaded,setStockLoaded]=useState(false);
   const [tasks,setTasks]=useState([]);
   const [vaccinations,setVaccinations]=useState([]);
+  const [capital,setCapital]=useState({initial:0,transactions:[],updatedAt:""});
+  const [capitalLoaded,setCapitalLoaded]=useState(false);
   const [user,setUser]=useState(null);
   const [sessionLoaded,setSessionLoaded]=useState(false);
   const [page,setPage]=useState("home");
@@ -1755,6 +1816,20 @@ function App(){
     return()=>unsubs.forEach(u=>u());
   },[]);
 
+  // Capital Firestore listener
+  useEffect(()=>{
+    const unsub=db.collection("farmiq").doc("capital").onSnapshot(doc=>{
+      if(doc.exists) setCapital(doc.data());
+      else setCapital({initial:0,transactions:[],updatedAt:""});
+      setCapitalLoaded(true);
+    },err=>{console.error("capital listener error",err);setCapitalLoaded(true);});
+    return()=>unsub();
+  },[]);
+  useEffect(()=>{
+    if(!capitalLoaded) return;
+    db.collection("farmiq").doc("capital").set({...capital,updatedAt:new Date().toISOString()});
+  },[capital,capitalLoaded]);
+
   // Save to Firestore whenever data changes (after initial load)
   useEffect(()=>{if(pigsLoaded)     fsSet("pigs",pigs);},[pigs,pigsLoaded]);
   useEffect(()=>{if(feedsLoaded)    fsSet("feeds",feeds);},[feeds,feedsLoaded]);
@@ -1785,7 +1860,7 @@ function App(){
   const [forceShow,setForceShow]=useState(false);
   useEffect(()=>{const t=setTimeout(()=>setForceShow(true),6000);return()=>clearTimeout(t);},[]);
 
-  if(!forceShow&&(!sessionLoaded||!usersLoaded||!sessionsLoaded||!pigsLoaded||!feedsLoaded||!salesLoaded||!logsLoaded||!expensesLoaded||!incomesLoaded||!messagesLoaded||!reproLoaded||!stockLoaded)) return(<div style={{minHeight:"100vh",background:"linear-gradient(135deg,#0f2318 0%,#1a3a2a 100%)",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
+  if(!forceShow&&(!sessionLoaded||!usersLoaded||!sessionsLoaded||!pigsLoaded||!feedsLoaded||!salesLoaded||!logsLoaded||!expensesLoaded||!incomesLoaded||!messagesLoaded||!reproLoaded||!stockLoaded||!capitalLoaded)) return(<div style={{minHeight:"100vh",background:"linear-gradient(135deg,#0f2318 0%,#1a3a2a 100%)",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
     <div style={{width:56,height:56,borderRadius:16,background:"rgba(74,222,128,.12)",border:"1px solid rgba(74,222,128,.25)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:26}}>🐷</div>
     <div style={{color:"#4ade80",fontSize:14,fontWeight:600,letterSpacing:2}}>LOADING FARMIQ…</div>
     <div style={{width:120,height:3,background:"rgba(255,255,255,.1)",borderRadius:3,overflow:"hidden"}}><div style={{width:"60%",height:"100%",background:"#4ade80",borderRadius:3,animation:"spin 1s linear infinite"}}/></div>
@@ -1807,6 +1882,7 @@ function App(){
     {id:"reproduction",l:"🐖 Reproduction"+(upcomingFarrows>0?" ("+upcomingFarrows+")":"")},
     {id:"stock",l:"📦 Stock"+(lowStockCount>0?" ⚠️"+lowStockCount:"")},
     {id:"ledger",l:"📒 Ledger"},
+    {id:"capital",l:"💵 Capital"},
     {id:"finance",l:"💰 Financials"},
     {id:"pigs",l:"🐷 Pigs"},
     {id:"feeding",l:"🌾 Feeding"},
@@ -1895,26 +1971,27 @@ function App(){
         </div>
       )}
       {isAdmin&&page==="bigdata"&&<BigData pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} users={users}/>}
-      {isAdmin&&page==="home"&&<AHome pigs={pigs} feeds={feeds} sales={sales} logs={logs} users={users} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} allData={allData} setPage={setPage}/>}
+      {isAdmin&&page==="home"&&<AHome pigs={pigs} feeds={feeds} sales={sales} logs={logs} users={users} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} allData={allData} setPage={setPage} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="ai"&&<AIAdvisor pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
       {isAdmin&&page==="pnl"&&<ProfitLossAnalysis pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} allData={allData}/>}
       {isAdmin&&page==="market"&&<RwandaMarket pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
       {isAdmin&&page==="reproduction"&&<ReproductionModule pigs={pigs} reproductions={reproductions} setReproductions={setReproductions} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} stock={stock}/>}
       {isAdmin&&page==="stock"&&<StockManager stock={stock} setStock={setStock} feeds={feeds} pigs={pigs}/>}
-      {isAdmin&&page==="ledger"&&<Ledger expenses={expenses} setExpenses={setExpenses} incomes={incomes} setIncomes={setIncomes} feeds={feeds} sales={sales}/>}
+      {isAdmin&&page==="ledger"&&<Ledger expenses={expenses} setExpenses={setExpenses} incomes={incomes} setIncomes={setIncomes} feeds={feeds} sales={sales} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="finance"&&<Fin feeds={feeds} sales={sales} pigs={pigs} logs={logs} expenses={expenses} incomes={incomes} allData={allData}/>}
       {isAdmin&&page==="pigs"&&<Pigs pigs={pigs} setPigs={setPigs} logs={logs} allData={allData}/>}
-      {isAdmin&&page==="feeding"&&<FeedLog feeds={feeds} pigs={pigs} logs={logs} sales={sales} expenses={expenses} incomes={incomes} allData={allData}/>}
-      {isAdmin&&page==="sales"&&<SaleLog sales={sales} pigs={pigs} feeds={feeds} logs={logs} expenses={expenses} incomes={incomes} allData={allData}/>}
-      {isAdmin&&page==="daylogs"&&<DLogs logs={logs} pigs={pigs} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} allData={allData}/>}
+      {isAdmin&&page==="feeding"&&<FeedLog feeds={feeds} setFeeds={setFeeds} pigs={pigs} logs={logs} sales={sales} expenses={expenses} incomes={incomes} allData={allData} user={user}/>}
+      {isAdmin&&page==="sales"&&<SaleLog sales={sales} setSales={setSales} pigs={pigs} feeds={feeds} logs={logs} expenses={expenses} incomes={incomes} allData={allData} user={user}/>}
+      {isAdmin&&page==="daylogs"&&<DLogs logs={logs} setLogs={setLogs} pigs={pigs} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} allData={allData} user={user}/>}
       {isAdmin&&page==="messages"&&<AIMessages users={users} messages={messages} setMessages={setMessages} pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
       {isAdmin&&page==="workers"&&<Workers users={users} setUsers={setUsers}/>}
       {isAdmin&&page==="remote"&&<RemoteWorkAdmin sessions={sessions} setSessions={setSessions} users={users}/>}
+      {isAdmin&&page==="capital"&&<CapitalManager capital={capital} setCapital={setCapital} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} pigs={pigs}/>}
       {!isAdmin&&page==="home"&&<WHome user={user} logs={logs} feeds={feeds} sales={sales} messages={messages}/>}
       {!isAdmin&&page==="inbox"&&<WorkerInbox messages={messages}/>}
-      {!isAdmin&&page==="dailyentry"&&<DEntry user={user} pigs={pigs} logs={logs} setLogs={setLogs}/>}
-      {!isAdmin&&page==="feedentry"&&<FEntry user={user} pigs={pigs} feeds={feeds} setFeeds={setFeeds}/>}
-      {!isAdmin&&page==="saleentry"&&<SEntry user={user} pigs={pigs} setPigs={setPigs} sales={sales} setSales={setSales}/>}
+      {!isAdmin&&page==="dailyentry"&&<DEntry user={user} pigs={pigs} logs={logs} setLogs={setLogs} capital={capital} setCapital={setCapital}/>}
+      {!isAdmin&&page==="feedentry"&&<FEntry user={user} pigs={pigs} feeds={feeds} setFeeds={setFeeds} capital={capital} setCapital={setCapital}/>}
+      {!isAdmin&&page==="saleentry"&&<SEntry user={user} pigs={pigs} setPigs={setPigs} sales={sales} setSales={setSales} capital={capital} setCapital={setCapital}/>}
       {!isAdmin&&page==="remotework"&&<RemoteWorkPanel user={user} sessions={sessions} setSessions={setSessions} messages={messages}/>}
       {isAdmin&&page==="performance"&&<WorkerPerformance users={users} logs={logs} feeds={feeds} sales={sales}/>}
       {isAdmin&&page==="weekly"&&<WeeklyReport pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} users={users} stock={stock}/>}
@@ -2686,6 +2763,195 @@ function VaccinationTracker({pigs,users,vaccinations,setVaccinations,user}){
   </div>);
 }
 
+/* ─── Capital Manager (Admin Only) ─── */
+function CapitalManager({capital,setCapital,feeds,sales,expenses,incomes,pigs}){
+  const [tab,setTab]=useState("overview");
+  const [form,setForm]=useState({type:"income",category:"Other Income",amount:"",description:"",date:toDay()});
+  const [saved,setSaved]=useState(false);
+  const [editInitial,setEditInitial]=useState(false);
+  const [newInitial,setNewInitial]=useState(String(capital.initial||""));
+  const [editId,setEditId]=useState(null);
+  const [editForm,setEditForm]=useState(null);
+
+  const txs=capital.transactions||[];
+  const balance=calcCapitalBalance(capital);
+  const incomeTotal=txs.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
+  const expenseTotal=txs.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
+
+  const INCOME_CATS=["Pig Sale","Piglet Sale","Manure Sale","Investment","Loan","Gift","Other Income"];
+  const EXPENSE_CATS=["Feed Purchase","Pig Purchase","Veterinary","Medicine","Equipment","Labour","Transport","Utilities","Maintenance","Pig Death Loss","Other"];
+
+  function addTx(){
+    if(!form.amount||parseFloat(form.amount)<=0) return;
+    const tx={id:uid(),type:form.type,category:form.category,amount:parseFloat(form.amount),description:form.description,date:form.date,createdAt:new Date().toISOString(),manual:true};
+    setCapital(prev=>({...prev,transactions:[...(prev.transactions||[]),tx]}));
+    setSaved(true);
+    setForm({type:"income",category:"Other Income",amount:"",description:"",date:toDay()});
+    setTimeout(()=>setSaved(false),2000);
+  }
+
+  function deleteTx(id){
+    setCapital(prev=>({...prev,transactions:(prev.transactions||[]).filter(t=>t.id!==id)}));
+  }
+
+  function saveEdit(id){
+    setCapital(prev=>({...prev,transactions:(prev.transactions||[]).map(t=>t.id===id?{...t,...editForm,amount:parseFloat(editForm.amount)||t.amount}:t)}));
+    setEditId(null);setEditForm(null);
+  }
+
+  const tabs=[{id:"overview",l:"📊 Overview"},{id:"add",l:"➕ Add Transaction"},{id:"history",l:"📋 History"}];
+
+  return(<div>
+    <div style={S.h1}>💵 Capital Management</div>
+    <div style={S.sub}>Track your business capital · Admin only</div>
+
+    {/* Balance Banner */}
+    <div style={{background:"linear-gradient(135deg,#0f2318,#1a3d26)",borderRadius:14,padding:"18px 20px",marginBottom:16,position:"relative"}}>
+      <div style={{fontSize:11,color:"rgba(74,222,128,.7)",fontWeight:600,letterSpacing:1,textTransform:"uppercase",marginBottom:4}}>Current Capital Balance</div>
+      <div style={{fontSize:34,fontWeight:800,color:balance>=0?"#4ade80":"#f87171",marginBottom:8}}>{fmtRWF(balance)}</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+        {[["💰 Initial Capital",fmtRWF(capital.initial||0),"rgba(74,222,128,.6)"],["📥 Total Income",fmtRWF(incomeTotal),"#34d399"],["📤 Total Expenses",fmtRWF(expenseTotal),"#f87171"]].map(([l,v,c])=>(
+          <div key={l} style={{background:"rgba(255,255,255,.06)",borderRadius:9,padding:"8px 11px"}}>
+            <div style={{fontSize:9,color:"rgba(255,255,255,.45)",marginBottom:3}}>{l}</div>
+            <div style={{fontSize:14,fontWeight:700,color:c}}>{v}</div>
+          </div>
+        ))}
+      </div>
+      <button onClick={()=>{setEditInitial(!editInitial);setNewInitial(String(capital.initial||""));}} style={{position:"absolute",top:16,right:16,padding:"6px 12px",borderRadius:8,border:"1px solid rgba(74,222,128,.35)",background:"rgba(74,222,128,.1)",color:"#4ade80",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>⚙️ Edit Initial</button>
+    </div>
+
+    {editInitial&&<div style={{...S.card,marginBottom:14,border:"1px solid rgba(74,222,128,.3)"}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:10}}>Set Initial Capital (before any transactions)</div>
+      <div style={{display:"flex",gap:9}}>
+        <input type="number" value={newInitial} onChange={e=>setNewInitial(e.target.value)} placeholder="e.g. 1000000" style={{...S.inp,flex:1}}/>
+        <button onClick={()=>{setCapital(prev=>({...prev,initial:parseFloat(newInitial)||0}));setEditInitial(false);}} style={{...S.btn(C.accent),padding:"9px 16px"}}>Save</button>
+        <button onClick={()=>setEditInitial(false)} style={{...S.btn("#374151"),padding:"9px 16px"}}>Cancel</button>
+      </div>
+    </div>}
+
+    {/* Tabs */}
+    <div style={{display:"flex",gap:6,marginBottom:16,overflowX:"auto"}}>
+      {tabs.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"8px 14px",borderRadius:9,border:"none",background:tab===t.id?C.accent:"transparent",color:tab===t.id?"#fff":C.muted,fontWeight:tab===t.id?700:400,fontSize:12,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>{t.l}</button>)}
+    </div>
+
+    {/* Overview */}
+    {tab==="overview"&&(<div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:12,marginBottom:16}}>
+        <KPI icon="💵" label="Net Capital" value={fmtRWF(balance)} color={balance>=0?C.accent:C.red}/>
+        <KPI icon="📥" label="All Income" value={fmtRWF((capital.initial||0)+incomeTotal)} color="#10b981"/>
+        <KPI icon="📤" label="All Expenses" value={fmtRWF(expenseTotal)} color={C.red}/>
+        <KPI icon="🔢" label="Transactions" value={txs.length} color={C.blue}/>
+      </div>
+      <div style={S.card}>
+        <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>📋 Recent Transactions</div>
+        {txs.length===0&&<div style={{color:C.faint,fontSize:13}}>No transactions yet. Add one to get started.</div>}
+        {txs.slice().reverse().slice(0,8).map((tx,i)=>(
+          <div key={i} style={{...S.row,flexWrap:"wrap",gap:4}}>
+            <div style={{flex:1}}>
+              <div style={{display:"flex",alignItems:"center",gap:7}}>
+                <span style={{fontSize:11,padding:"2px 7px",borderRadius:12,background:tx.type==="income"?"rgba(16,185,129,.12)":"rgba(239,68,68,.12)",color:tx.type==="income"?"#10b981":C.red,fontWeight:700}}>{tx.type==="income"?"↑ IN":"↓ OUT"}</span>
+                <span style={{color:C.text,fontWeight:600,fontSize:12}}>{tx.category}</span>
+              </div>
+              {tx.description&&<div style={{fontSize:11,color:C.faint,marginTop:2,paddingLeft:38}}>{tx.description}</div>}
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontWeight:700,color:tx.type==="income"?"#10b981":C.red}}>{fmtRWF(tx.amount)}</div>
+              <div style={{fontSize:10,color:C.faint}}>{tx.date}</div>
+            </div>
+          </div>
+        ))}
+        {txs.length>8&&<button onClick={()=>setTab("history")} style={{...S.btn(),width:"100%",marginTop:8,fontSize:12}}>View All {txs.length} Transactions →</button>}
+      </div>
+    </div>)}
+
+    {/* Add Transaction */}
+    {tab==="add"&&(<div style={{maxWidth:500}}>
+      {saved&&<div style={{padding:10,background:C.accentSoft,borderRadius:8,marginBottom:12,color:C.accent,fontSize:13,fontWeight:600}}>✅ Transaction recorded!</div>}
+      <div style={S.card}>
+        <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:14}}>➕ Record Transaction</div>
+        {/* Type toggle */}
+        <div style={{display:"flex",gap:8,marginBottom:14}}>
+          {[["income","📥 Income"],["expense","📤 Expense"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setForm({...form,type:v,category:v==="income"?"Other Income":"Other"})} style={{flex:1,padding:"10px",borderRadius:10,border:"2px solid "+(form.type===v?v==="income"?C.accent:C.red:C.border),background:form.type===v?v==="income"?C.accentSoft:"rgba(239,68,68,.07)":"transparent",color:form.type===v?v==="income"?C.accent:C.red:C.muted,fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>{l}</button>
+          ))}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+          <div>
+            <label style={S.lbl}>Category</label>
+            <select value={form.category} onChange={e=>setForm({...form,category:e.target.value})} style={S.inp}>
+              {(form.type==="income"?INCOME_CATS:EXPENSE_CATS).map(c=><option key={c}>{c}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={S.lbl}>Date</label>
+            <input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} style={S.inp}/>
+          </div>
+          <div style={{gridColumn:"1/-1"}}>
+            <label style={S.lbl}>Amount (RWF) *</label>
+            <input type="number" min="0" placeholder="e.g. 50000" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} style={S.inp}/>
+          </div>
+          <div style={{gridColumn:"1/-1"}}>
+            <label style={S.lbl}>Description</label>
+            <input placeholder="e.g. Bought 50kg maize bran from market" value={form.description} onChange={e=>setForm({...form,description:e.target.value})} style={S.inp}/>
+          </div>
+        </div>
+        {form.amount&&parseFloat(form.amount)>0&&<div style={{padding:"9px 13px",background:form.type==="income"?C.accentSoft:"rgba(239,68,68,.06)",borderRadius:8,marginBottom:12,fontSize:13,color:form.type==="income"?C.accent:C.red,fontWeight:600}}>
+          Capital will {form.type==="income"?"increase":"decrease"} by {fmtRWF(parseFloat(form.amount))} → New balance: {fmtRWF(balance+(form.type==="income"?parseFloat(form.amount):-parseFloat(form.amount)))}
+        </div>}
+        <button onClick={addTx} disabled={!form.amount||parseFloat(form.amount)<=0} style={{...S.btn(form.type==="income"?C.accent:C.red),width:"100%",padding:12,fontSize:14,opacity:!form.amount?0.5:1}}>
+          {form.type==="income"?"📥 Record Income →":"📤 Record Expense →"}
+        </button>
+      </div>
+    </div>)}
+
+    {/* History */}
+    {tab==="history"&&(<div style={S.card}>
+      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>📋 All Transactions ({txs.length})</div>
+      {txs.length===0&&<div style={{color:C.faint,fontSize:13}}>No transactions recorded yet.</div>}
+      {txs.slice().reverse().map((tx,i)=>(
+        <div key={i} style={{...S.card,marginBottom:8,padding:"10px 13px",border:"1px solid "+(tx.type==="income"?"rgba(16,185,129,.15)":"rgba(239,68,68,.15)")}}>
+          {editId===tx.id?(
+            <div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                <div><label style={S.lbl}>Type</label>
+                  <select value={editForm.type} onChange={e=>setEditForm({...editForm,type:e.target.value})} style={S.inp}><option value="income">Income</option><option value="expense">Expense</option></select>
+                </div>
+                <div><label style={S.lbl}>Amount</label><input type="number" value={editForm.amount} onChange={e=>setEditForm({...editForm,amount:e.target.value})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Category</label><input value={editForm.category} onChange={e=>setEditForm({...editForm,category:e.target.value})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Date</label><input type="date" value={editForm.date} onChange={e=>setEditForm({...editForm,date:e.target.value})} style={S.inp}/></div>
+                <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Description</label><input value={editForm.description} onChange={e=>setEditForm({...editForm,description:e.target.value})} style={S.inp}/></div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>saveEdit(tx.id)} style={{...S.btn(C.accent),flex:1,padding:"8px",fontSize:12}}>✓ Save</button>
+                <button onClick={()=>{setEditId(null);setEditForm(null);}} style={{...S.btn("#374151"),flex:1,padding:"8px",fontSize:12}}>Cancel</button>
+              </div>
+            </div>
+          ):(
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:2}}>
+                  <span style={{fontSize:11,padding:"2px 7px",borderRadius:12,background:tx.type==="income"?"rgba(16,185,129,.12)":"rgba(239,68,68,.12)",color:tx.type==="income"?"#10b981":C.red,fontWeight:700}}>{tx.type==="income"?"↑ IN":"↓ OUT"}</span>
+                  <span style={{color:C.text,fontWeight:600,fontSize:12}}>{tx.category}</span>
+                  {tx.manual&&<span style={{fontSize:9,color:C.faint,background:C.elevated,padding:"1px 5px",borderRadius:5}}>manual</span>}
+                </div>
+                {tx.description&&<div style={{fontSize:11,color:C.faint,paddingLeft:38}}>{tx.description}</div>}
+                <div style={{fontSize:10,color:C.faint,paddingLeft:38,marginTop:2}}>{tx.date}</div>
+              </div>
+              <div style={{textAlign:"right",flexShrink:0}}>
+                <div style={{fontWeight:700,color:tx.type==="income"?"#10b981":C.red,fontSize:14}}>{fmtRWF(tx.amount)}</div>
+                <div style={{display:"flex",gap:5,marginTop:5,justifyContent:"flex-end"}}>
+                  <button onClick={()=>{setEditId(tx.id);setEditForm({type:tx.type,category:tx.category,amount:String(tx.amount),description:tx.description||"",date:tx.date});}} style={{fontSize:10,padding:"3px 9px",borderRadius:6,border:"1px solid "+C.border,background:"transparent",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>✏️ Edit</button>
+                  <button onClick={()=>{if(window.confirm("Delete this transaction?"))deleteTx(tx.id);}} style={{fontSize:10,padding:"3px 9px",borderRadius:6,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>)}
+  </div>);
+}
+
 /* ─── Login ─── */
 function Login({users,setUsers,setUser}){
   const [tab,setTab]=useState("login");
@@ -3101,7 +3367,7 @@ function RwandaMarket({pigs,feeds,sales,logs,expenses,incomes,reproductions,stoc
 }
 
 /* ─── Admin Home ─── */
-function AHome({pigs,feeds,sales,logs,users,expenses,incomes,reproductions,stock,allData,setPage}){
+function AHome({pigs,feeds,sales,logs,users,expenses,incomes,reproductions,stock,allData,setPage,capital,setCapital}){
   const active=pigs.filter(p=>p.status==="active");
   const totalInc=sales.reduce((s,l)=>s+(l.total||0),0)+incomes.reduce((s,l)=>s+(l.amount||0),0);
   const totalExp=feeds.reduce((s,l)=>s+(l.cost||0),0)+expenses.reduce((s,l)=>s+(l.amount||0),0);
@@ -3111,9 +3377,33 @@ function AHome({pigs,feeds,sales,logs,users,expenses,incomes,reproductions,stock
   const lowStock=stock.filter(s=>s.quantity<=s.minLevel);
   const upcomingFarrows=pregnant.filter(r=>daysDiff(r.expectedFarrow)<=7&&daysDiff(r.expectedFarrow)>=0);
   const recentActivity=[...feeds.map(f=>({...f,type:"feed"})),...sales.map(s=>({...s,type:"sale"})),...logs.map(l=>({...l,type:"log"}))].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,6);
+  const capitalBalance=calcCapitalBalance(capital);
+  const [showCapitalSet,setShowCapitalSet]=useState(false);
+  const [newInitial,setNewInitial]=useState("");
   return(<div>
     <div style={S.h1}>📊 Farm Overview</div>
     <div style={S.sub}>{toDay()} · FarmIQ AI Management</div>
+
+    {/* Capital Banner */}
+    <div style={{background:"linear-gradient(135deg,#0f2318,#1a3d26)",borderRadius:14,padding:"16px 20px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+      <div>
+        <div style={{fontSize:11,color:"rgba(74,222,128,.7)",fontWeight:600,letterSpacing:1,textTransform:"uppercase",marginBottom:3}}>💵 Business Capital Balance</div>
+        <div style={{fontSize:28,fontWeight:800,color:capitalBalance>=0?"#4ade80":"#f87171"}}>{fmtRWF(capitalBalance)}</div>
+        <div style={{fontSize:11,color:"rgba(255,255,255,.45)",marginTop:2}}>Initial: {fmtRWF(capital.initial||0)} · {(capital.transactions||[]).length} transactions</div>
+      </div>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <button onClick={()=>{setShowCapitalSet(!showCapitalSet);setNewInitial(String(capital.initial||""));}} style={{padding:"8px 14px",borderRadius:9,border:"1px solid rgba(74,222,128,.35)",background:"rgba(74,222,128,.1)",color:"#4ade80",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>⚙️ Set Capital</button>
+        <button onClick={()=>setPage("capital")} style={{padding:"8px 14px",borderRadius:9,border:"1px solid rgba(74,222,128,.35)",background:"rgba(74,222,128,.1)",color:"#4ade80",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>📋 View All</button>
+      </div>
+    </div>
+    {showCapitalSet&&<div style={{...S.card,marginBottom:12,border:"1px solid rgba(74,222,128,.3)"}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:10}}>Set Initial Capital</div>
+      <div style={{display:"flex",gap:9}}>
+        <input type="number" value={newInitial} onChange={e=>setNewInitial(e.target.value)} placeholder="e.g. 500000" style={{...S.inp,flex:1}}/>
+        <button onClick={()=>{setCapital(prev=>({...prev,initial:parseFloat(newInitial)||0}));setShowCapitalSet(false);}} style={{...S.btn(C.accent),padding:"9px 16px",whiteSpace:"nowrap"}}>Save</button>
+      </div>
+      <div style={{fontSize:11,color:C.faint,marginTop:6}}>This sets your starting business capital before any transactions.</div>
+    </div>}
 
     {/* Smart alerts */}
     {upcomingFarrows.length>0&&<div onClick={()=>setPage("reproduction")} style={{padding:"10px 14px",background:"rgba(244,114,182,.08)",border:"1px solid rgba(244,114,182,.3)",borderRadius:9,marginBottom:10,fontSize:13,color:C.pink,cursor:"pointer"}}>
@@ -3260,10 +3550,13 @@ function Pigs({pigs,setPigs,logs,allData}){
 }
 
 /* ─── Feed Log ─── */
-function FeedLog({feeds,pigs,logs,sales,expenses,incomes,allData}){
+function FeedLog({feeds,setFeeds,pigs,logs,sales,expenses,incomes,allData,user}){
   const [tab,setTab]=useState("records");
   const [filterWorker,setFilterWorker]=useState("");
   const [filterType,setFilterType]=useState("");
+  const [editId,setEditId]=useState(null);
+  const [editForm,setEditForm]=useState(null);
+  const isAdmin=user&&user.role==="admin";
 
   // ── Core Calculations ──
   const totalKg=feeds.reduce((s,f)=>s+(parseFloat(f.kg)||0),0);
@@ -3401,18 +3694,37 @@ function FeedLog({feeds,pigs,logs,sales,expenses,incomes,allData}){
         const cpk=f.kg>0?Math.round(f.cost/f.kg):0;
         const cpkColor=cpk>0&&avgCostPerKg>0?(cpk>avgCostPerKg*1.2?C.red:cpk<avgCostPerKg*0.8?C.accent:C.muted):C.muted;
         return(<div key={i} style={{...S.card,marginBottom:8,padding:"10px 14px"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+          {editId===f.id&&editForm?(
             <div>
-              <div style={{fontWeight:600,color:C.text,fontSize:13}}>{f.feedType||"Feed"} <span style={{color:C.faint,fontWeight:400,fontSize:11}}>— {f.worker}</span></div>
-              <div style={{fontSize:11,color:C.faint,marginTop:2}}>
-                {f.date} {pig?" · 🐷 "+pig.tag:" · All pigs"} {f.notes?" · "+f.notes:""}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                <div><label style={S.lbl}>Amount (kg)</label><input type="number" value={editForm.kg} onChange={e=>setEditForm({...editForm,kg:e.target.value})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Cost (RWF)</label><input type="number" value={editForm.cost} onChange={e=>setEditForm({...editForm,cost:e.target.value})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Feed Type</label><input value={editForm.feedType} onChange={e=>setEditForm({...editForm,feedType:e.target.value})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Date</label><input type="date" value={editForm.date} onChange={e=>setEditForm({...editForm,date:e.target.value})} style={S.inp}/></div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>{setFeeds(p=>p.map(x=>x.id===f.id?{...x,...editForm,kg:parseFloat(editForm.kg)||x.kg,cost:parseFloat(editForm.cost)||x.cost}:x));setEditId(null);setEditForm(null);}} style={{...S.btn(C.accent),flex:1,padding:"7px",fontSize:12}}>✓ Save</button>
+                <button onClick={()=>{setEditId(null);setEditForm(null);}} style={{...S.btn("#374151"),flex:1,padding:"7px",fontSize:12}}>Cancel</button>
               </div>
             </div>
-            <div style={{textAlign:"right"}}>
-              <div style={{fontWeight:700,color:C.amber,fontSize:14}}>{f.kg}kg · {fmtRWF(f.cost)}</div>
-              <div style={{fontSize:10,color:cpkColor,marginTop:2}}>RWF {fmtNum(cpk)}/kg {cpk>avgCostPerKg*1.2?"⚠️ above avg":cpk>0&&cpk<avgCostPerKg*0.8?"✅ below avg":""}</div>
+          ):(
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+              <div>
+                <div style={{fontWeight:600,color:C.text,fontSize:13}}>{f.feedType||"Feed"} <span style={{color:C.faint,fontWeight:400,fontSize:11}}>— {f.worker}</span></div>
+                <div style={{fontSize:11,color:C.faint,marginTop:2}}>
+                  {f.date} {pig?" · 🐷 "+pig.tag:" · All pigs"} {f.notes?" · "+f.notes:""}
+                </div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontWeight:700,color:C.amber,fontSize:14}}>{f.kg}kg · {fmtRWF(f.cost)}</div>
+                <div style={{fontSize:10,color:cpkColor,marginTop:2}}>RWF {fmtNum(cpk)}/kg {cpk>avgCostPerKg*1.2?"⚠️ above avg":cpk>0&&cpk<avgCostPerKg*0.8?"✅ below avg":""}</div>
+                {isAdmin&&<div style={{display:"flex",gap:5,marginTop:5,justifyContent:"flex-end"}}>
+                  <button onClick={()=>{setEditId(f.id);setEditForm({kg:String(f.kg),cost:String(f.cost),feedType:f.feedType,date:f.date});}} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid "+C.border,background:"transparent",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>✏️ Edit</button>
+                  <button onClick={()=>{if(window.confirm("Delete this feed record?"))setFeeds(p=>p.filter(x=>x.id!==f.id));}} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>
+                </div>}
+              </div>
             </div>
-          </div>
+          )}
         </div>);
       })}
       {filtered.length>0&&<div style={{...S.card,padding:"10px 14px",background:"rgba(245,158,11,.04)",border:"1px solid rgba(245,158,11,.2)"}}>
@@ -3500,15 +3812,47 @@ function FeedLog({feeds,pigs,logs,sales,expenses,incomes,allData}){
 }
 
 /* ─── Sales Log ─── */
-function SaleLog({sales,pigs,feeds,logs,expenses,incomes,allData}){
+function SaleLog({sales,setSales,pigs,feeds,logs,expenses,incomes,allData,user}){
+  const [editId,setEditId]=useState(null);
+  const [editForm,setEditForm]=useState(null);
+  const isAdmin=user&&user.role==="admin";
   return(<div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-      <div><div style={S.h1}>Sales Records</div><div style={S.sub}>{sales.length} sales · {fmtRWF(sales.reduce((s,l)=>s+l.total,0))}</div></div>
+      <div><div style={S.h1}>Sales Records</div><div style={S.sub}>{sales.length} sales · {fmtRWF(sales.reduce((s,l)=>s+(l.total||0),0))}</div></div>
       <PDFBtn label="Finance PDF" type="finance" getData={()=>allData} icon="🏷️" color="#374151"/>
     </div>
     <div style={S.card}>
       {sales.length===0&&<div style={{color:C.faint,fontSize:13}}>No sales yet.</div>}
-      {sales.slice().reverse().map((s,i)=>{const pig=pigs.find(p=>p.id===s.pigId);return<div key={i} style={S.row}><span style={{color:C.muted}}>{s.date} · {s.worker} · {pig?pig.tag:"—"} · {s.buyer||"—"}</span><span style={{color:"#10b981",fontWeight:700}}>{fmtRWF(s.total)}</span></div>;})}
+      {sales.slice().reverse().map((s,i)=>{
+        const pig=pigs.find(p=>p.id===s.pigId);
+        return(<div key={i} style={{...S.row,flexWrap:"wrap",alignItems:"flex-start",gap:4,paddingBottom:8,marginBottom:8,borderBottom:"1px solid "+C.elevated}}>
+          {editId===s.id&&editForm?(
+            <div style={{width:"100%"}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                <div><label style={S.lbl}>Buyer</label><input value={editForm.buyer} onChange={e=>setEditForm({...editForm,buyer:e.target.value})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Weight (kg)</label><input type="number" value={editForm.weight} onChange={e=>setEditForm({...editForm,weight:e.target.value})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Price/kg (RWF)</label><input type="number" value={editForm.priceKg} onChange={e=>setEditForm({...editForm,priceKg:e.target.value})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Date</label><input type="date" value={editForm.date} onChange={e=>setEditForm({...editForm,date:e.target.value})} style={S.inp}/></div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>{setSales(p=>p.map(x=>x.id===s.id?{...x,...editForm,weight:parseFloat(editForm.weight)||x.weight,priceKg:parseFloat(editForm.priceKg)||x.priceKg,total:parseFloat(editForm.weight||x.weight)*parseFloat(editForm.priceKg||x.priceKg)}:x));setEditId(null);setEditForm(null);}} style={{...S.btn(C.accent),flex:1,padding:"7px",fontSize:12}}>✓ Save</button>
+                <button onClick={()=>{setEditId(null);setEditForm(null);}} style={{...S.btn("#374151"),flex:1,padding:"7px",fontSize:12}}>Cancel</button>
+              </div>
+            </div>
+          ):(
+            <>
+              <div style={{flex:1}}><span style={{color:C.muted,fontSize:12}}>{s.date} · {s.worker} · {pig?pig.tag:"—"} · {s.buyer||"—"}</span></div>
+              <div style={{textAlign:"right"}}>
+                <span style={{color:"#10b981",fontWeight:700}}>{fmtRWF(s.total)}</span>
+                {isAdmin&&<div style={{display:"flex",gap:5,marginTop:4,justifyContent:"flex-end"}}>
+                  <button onClick={()=>{setEditId(s.id);setEditForm({buyer:s.buyer||"",weight:String(s.weight||""),priceKg:String(s.priceKg||""),date:s.date});}} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid "+C.border,background:"transparent",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>✏️ Edit</button>
+                  <button onClick={()=>{if(window.confirm("Delete this sale record?"))setSales(p=>p.filter(x=>x.id!==s.id));}} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>
+                </div>}
+              </div>
+            </>
+          )}
+        </div>);
+      })}
     </div>
     <div style={{fontSize:14,fontWeight:700,color:C.accent,margin:"6px 0 12px"}}>✦ AI Sales Strategy</div>
     <AIPrediction pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} topic="Best sell timing Rwanda, optimal weight at sale, market forecast, best buyers." label="Sales & Market Forecast" icon="🏷️"/>
@@ -3516,7 +3860,8 @@ function SaleLog({sales,pigs,feeds,logs,expenses,incomes,allData}){
 }
 
 /* ─── Daily Logs ─── */
-function DLogs({logs,pigs,feeds,sales,expenses,incomes,allData}){
+function DLogs({logs,setLogs,pigs,feeds,sales,expenses,incomes,allData,user}){
+  const isAdmin=user&&user.role==="admin";
   return(<div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
       <div><div style={S.h1}>Daily Farm Logs</div><div style={S.sub}>{logs.length} reports</div></div>
@@ -3527,7 +3872,10 @@ function DLogs({logs,pigs,feeds,sales,expenses,incomes,allData}){
       <div key={i} style={S.card}>
         <div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}>
           <div style={{fontWeight:700}}>{log.worker}</div>
-          <span style={{fontSize:11,color:C.faint}}>{log.date}</span>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:11,color:C.faint}}>{log.date}</span>
+            {isAdmin&&<button onClick={()=>{if(window.confirm("Delete this log?"))setLogs(p=>p.filter(l=>l.id!==log.id));}} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>}
+          </div>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:7,marginBottom:7}}>
           {[["Checked",log.checked],["Sick",log.sick],["Deaths",log.deaths],["Births",log.births],["Water",log.water?"✓":"✗"],["Cleaned",log.cleaned?"✓":"✗"]].map(([l,v])=>(
@@ -3764,9 +4112,9 @@ function ConfirmDialog({title,body,onConfirm,onCancel}){
   );
 }
 
-function DEntry({user,pigs,logs,setLogs}){
+function DEntry({user,pigs,logs,setLogs,capital,setCapital}){
   const active=pigs.filter(p=>p.status==="active");
-  const [form,setForm]=useState({checked:active.length,sick:0,deaths:0,births:0,water:true,cleaned:true,notes:""});
+  const [form,setForm]=useState({checked:active.length,sick:0,deaths:0,births:0,water:true,cleaned:true,notes:"",deathLossAmount:""});
   const [done,setDone]=useState(false);
   const [confirm,setConfirm]=useState(false);
   const [toast,setToast]=useState(null);
@@ -3775,6 +4123,10 @@ function DEntry({user,pigs,logs,setLogs}){
     setConfirm(false);
     const newLog={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay()};
     setLogs(p=>[...p,newLog]);
+    // Deduct capital for pig deaths if amount entered
+    if(setCapital&&form.deaths>0&&parseFloat(form.deathLossAmount)>0){
+      capitalTx(capital,setCapital,{type:"expense",category:"Pig Death Loss",amount:parseFloat(form.deathLossAmount),description:`${form.deaths} pig(s) died — loss entered by ${user.name}`,date:toDay()});
+    }
     try{
       await jbinAppend("logs",newLog);
       setToast({type:"success",message:"Daily report saved successfully!"});
@@ -3783,7 +4135,7 @@ function DEntry({user,pigs,logs,setLogs}){
   }
   if(logs.some(l=>l.workerId===user.id&&l.date===toDay())||done)return(<div style={{textAlign:"center",padding:60}}><div style={{fontSize:48}}>✅</div><div style={{fontSize:19,fontWeight:700,color:C.accent,marginTop:14}}>Report submitted!</div><div style={{fontSize:13,color:C.faint,marginTop:6}}>Come back tomorrow.</div></div>);
   return(<div style={{maxWidth:490}}>
-    {confirm&&<ConfirmDialog title="Submit Daily Report?" body={`Checked: ${form.checked} pigs · Sick: ${form.sick} · Deaths: ${form.deaths} · Births: ${form.births}. Are you sure you want to submit this report for ${toDay()}?`} onConfirm={doSave} onCancel={()=>setConfirm(false)}/>}
+    {confirm&&<ConfirmDialog title="Submit Daily Report?" body={`Checked: ${form.checked} pigs · Sick: ${form.sick} · Deaths: ${form.deaths} · Births: ${form.births}${form.deaths>0&&form.deathLossAmount?" · Loss: RWF "+parseInt(form.deathLossAmount).toLocaleString():""}. Are you sure you want to submit this report for ${toDay()}?`} onConfirm={doSave} onCancel={()=>setConfirm(false)}/>}
     {toast&&<Toast message={toast.message} type={toast.type} onClose={closeToast}/>}
     <div style={S.h1}>Daily Report — {toDay()}</div><div style={S.card}>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
@@ -3794,84 +4146,85 @@ function DEntry({user,pigs,logs,setLogs}){
         <div key={k}><label style={S.lbl}>{l}</label><select value={form[k]?"yes":"no"} onChange={e=>setForm({...form,[k]:e.target.value==="yes"})} style={S.inp}><option value="yes">Yes ✓</option><option value="no">No ✗</option></select></div>
       ))}
     </div>
+    {/* Death loss amount */}
+    {form.deaths>0&&<div style={{marginBottom:12,padding:"10px 13px",background:"rgba(239,68,68,.05)",border:"1px solid rgba(239,68,68,.2)",borderRadius:9}}>
+      <label style={{...S.lbl,color:C.red}}>💀 Capital Loss from {form.deaths} Death(s) (RWF)</label>
+      <input type="number" min="0" placeholder="Enter total loss amount in RWF" value={form.deathLossAmount} onChange={e=>setForm({...form,deathLossAmount:e.target.value})} style={S.inp}/>
+      <div style={{fontSize:10,color:C.faint,marginTop:4}}>This amount will be deducted from your business capital.</div>
+    </div>}
     <div style={{marginBottom:12}}><label style={S.lbl}>Notes</label><textarea rows={3} value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="Any observations..." style={{...S.inp,resize:"vertical"}}/></div>
     <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={()=>setConfirm(true)}>Submit Report →</button>
   </div></div>);
 }
 
-function FEntry({user,pigs,feeds,setFeeds}){
+function FEntry({user,pigs,feeds,setFeeds,capital,setCapital}){
   // Reference prices (RWF/kg) for auto-cost calculation
   const FEED_PRICE_REF={"Maize bran":350,"Soya meal":800,"Pellets":950,"Kitchen waste":0,"Mixed":500,"Other":400};
   const STAGE_FEED={Piglet:0.5,Weaner:1.0,Grower:1.8,Finisher:2.8,Gilt:2.2,Sow:2.5,Boar:2.0};
 
-  const [form,setForm]=useState({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});
+  const [form,setForm]=useState({pigId:"",feedType:"Maize bran",kg:"",costPerKg:"",notes:""});
   const [saved,setSaved]=useState(false);
   const [confirm,setConfirm]=useState(false);
   const [toast,setToast]=useState(null);
-  const [costMode,setCostMode]=useState("manual"); // "manual" or "auto"
   const closeToast=useCallback(()=>setToast(null),[]);
   const active=pigs.filter(p=>p.status==="active");
 
-  // Auto-calculate cost when kg or feedType changes (if in auto mode)
+  // Auto-fill costPerKg from reference when feed type changes
   function updateForm(patch){
     const updated={...form,...patch};
-    if(costMode==="auto"||patch.feedType){
-      const refPrice=FEED_PRICE_REF[updated.feedType]||400;
-      const kg=parseFloat(updated.kg)||0;
-      if(kg>0&&refPrice>0) updated.cost=String(Math.round(kg*refPrice));
-      else if(kg===0) updated.cost="";
+    if(patch.feedType){
+      const ref=FEED_PRICE_REF[updated.feedType]||0;
+      if(ref>0) updated.costPerKg=String(ref);
     }
     setForm(updated);
   }
 
-  // Computed cost-per-kg for live preview
+  // Computed values
   const kg=parseFloat(form.kg)||0;
-  const cost=parseFloat(form.cost)||0;
-  const cpk=kg>0&&cost>0?Math.round(cost/kg):0;
+  const costPerKg=parseFloat(form.costPerKg)||0;
+  const totalCost=kg>0&&costPerKg>0?Math.round(kg*costPerKg):0;
   const refCpk=FEED_PRICE_REF[form.feedType]||0;
-  const cpkWarning=cpk>0&&refCpk>0&&cpk>refCpk*1.3?"⚠️ Price seems high":cpk>0&&refCpk>0&&cpk<refCpk*0.5?"ℹ️ Price seems low":"";
+  const cpkWarning=costPerKg>0&&refCpk>0&&costPerKg>refCpk*1.3?"⚠️ Price seems high":costPerKg>0&&refCpk>0&&costPerKg<refCpk*0.5?"ℹ️ Price seems low":"";
 
-  // Suggested kg based on selected pig's stage
   const selPig=active.find(p=>p.id===form.pigId);
   const suggestedKg=selPig?(STAGE_FEED[selPig.stage]||2.0):null;
 
-  // Historical avg cost/kg for this feed type from previous logs
   const histFeeds=feeds.filter(f=>f.feedType===form.feedType&&f.kg>0&&f.cost>0);
   const histAvgCpk=histFeeds.length>0?Math.round(histFeeds.reduce((s,f)=>s+f.cost/f.kg,0)/histFeeds.length):null;
 
   async function doSave(){
     setConfirm(false);
-    const kgVal=parseFloat(form.kg);
-    const costVal=parseFloat(form.cost);
-    if(!kgVal||kgVal<=0||!costVal||costVal<=0){
-      setToast({type:"error",message:"Please enter valid kg and cost values."});
+    if(!kg||kg<=0||!costPerKg||costPerKg<=0){
+      setToast({type:"error",message:"Please enter valid kg and cost per kg values."});
       return;
     }
-    const newFeed={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg:kgVal,cost:costVal};
+    const costVal=totalCost;
+    const newFeed={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg,cost:costVal,costPerKg};
     setFeeds(p=>[...p,newFeed]);
+    // Record capital transaction (expense)
+    if(setCapital) capitalTx(capital,setCapital,{type:"expense",category:"Feed Purchase",amount:costVal,description:`${kg}kg ${form.feedType}${selPig?" for "+selPig.tag:""}`,date:toDay()});
     try{
       await jbinAppend("feeds",newFeed);
-      setToast({type:"success",message:`✅ ${kgVal}kg of ${form.feedType} saved · RWF ${Math.round(costVal).toLocaleString()} (${Math.round(costVal/kgVal)} RWF/kg)`});
+      setToast({type:"success",message:`✅ ${kg}kg of ${form.feedType} saved · RWF ${costVal.toLocaleString()} (${Math.round(costPerKg)} RWF/kg)`});
       setSaved(true);
-      setTimeout(()=>{setSaved(false);setForm({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});},2200);
+      setTimeout(()=>{setSaved(false);setForm({pigId:"",feedType:"Maize bran",kg:"",costPerKg:"",notes:""});},2200);
     }catch(e){setToast({type:"error",message:"Failed to save. Check internet and try again."});}
   }
   function trySubmit(){
-    if(!form.kg||!form.cost||parseFloat(form.kg)<=0||parseFloat(form.cost)<=0)return;
+    if(!form.kg||!form.costPerKg||parseFloat(form.kg)<=0||parseFloat(form.costPerKg)<=0)return;
     setConfirm(true);
   }
 
   return(<div style={{maxWidth:520}}>
     {confirm&&<ConfirmDialog
       title="Save Feeding Log?"
-      body={`${form.kg}kg of ${form.feedType} · Cost: RWF ${parseInt(form.cost||0).toLocaleString()} · ${Math.round((parseFloat(form.cost||0))/(parseFloat(form.kg)||1))} RWF/kg${selPig?" · 🐷 "+selPig.tag:" · All pigs"}. Confirm?`}
+      body={`${kg}kg of ${form.feedType} · RWF ${costPerKg}/kg · Total: RWF ${totalCost.toLocaleString()}${selPig?" · 🐷 "+selPig.tag:" · All pigs"}. Confirm?`}
       onConfirm={doSave} onCancel={()=>setConfirm(false)}/>}
     {toast&&<Toast message={toast.message} type={toast.type} onClose={closeToast}/>}
     <div style={S.h1}>🌾 Log Feeding</div>
     {saved&&<div style={{padding:10,background:C.accentSoft,borderRadius:7,marginBottom:12,color:C.accent,fontSize:13}}>✓ Saved!</div>}
     <div style={S.card}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-        {/* Pig selector — shows stage and expected kg */}
         <div>
           <label style={S.lbl}>Pig (or All)</label>
           <select value={form.pigId} onChange={e=>setForm({...form,pigId:e.target.value})} style={S.inp}>
@@ -3880,7 +4233,6 @@ function FEntry({user,pigs,feeds,setFeeds}){
           </select>
           {selPig&&<div style={{fontSize:10,color:C.accent,marginTop:3}}>📊 Suggested: {suggestedKg}kg/day for {selPig.stage}</div>}
         </div>
-        {/* Feed type */}
         <div>
           <label style={S.lbl}>Feed Type</label>
           <select value={form.feedType} onChange={e=>updateForm({feedType:e.target.value})} style={S.inp}>
@@ -3893,34 +4245,28 @@ function FEntry({user,pigs,feeds,setFeeds}){
         <div>
           <label style={S.lbl}>Amount (kg) *</label>
           <input type="number" min="0" step="0.1" placeholder={suggestedKg||"15"} value={form.kg}
-            onChange={e=>updateForm({kg:e.target.value})} style={S.inp}/>
+            onChange={e=>setForm({...form,kg:e.target.value})} style={S.inp}/>
           {suggestedKg&&form.kg&&Math.abs(parseFloat(form.kg)-suggestedKg)>suggestedKg*0.5&&(
             <div style={{fontSize:10,color:C.amber,marginTop:3}}>⚠️ Significantly different from suggested {suggestedKg}kg</div>
           )}
         </div>
-        {/* Cost */}
+        {/* Cost per kg */}
         <div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-            <label style={{...S.lbl,marginBottom:0}}>Cost (RWF) *</label>
-            <button onClick={()=>{const nm=costMode==="auto"?"manual":"auto";setCostMode(nm);if(nm==="auto")updateForm({});}}
-              style={{fontSize:9,padding:"2px 7px",borderRadius:10,border:"1px solid "+(costMode==="auto"?"rgba(22,163,74,.4)":"rgba(100,116,139,.3)"),background:costMode==="auto"?"rgba(22,163,74,.08)":"transparent",color:costMode==="auto"?C.accent:C.muted,cursor:"pointer",fontFamily:"inherit"}}>
-              {costMode==="auto"?"✦ Auto":"Manual"}
-            </button>
-          </div>
-          <input type="number" min="0" placeholder={refCpk>0&&kg>0?String(Math.round(kg*refCpk)):"3500"} value={form.cost}
-            onChange={e=>{setCostMode("manual");setForm({...form,cost:e.target.value});}} style={S.inp}/>
+          <label style={S.lbl}>Cost per kg (RWF) *</label>
+          <input type="number" min="0" placeholder={refCpk||"350"} value={form.costPerKg}
+            onChange={e=>setForm({...form,costPerKg:e.target.value})} style={S.inp}/>
+          {cpkWarning&&<div style={{fontSize:10,color:C.amber,marginTop:3}}>{cpkWarning}</div>}
         </div>
       </div>
 
-      {/* Live cost-per-kg preview */}
-      {kg>0&&cost>0&&<div style={{padding:"10px 14px",background:"rgba(22,163,74,.04)",border:"1px solid rgba(22,163,74,.18)",borderRadius:9,marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+      {/* Live total preview */}
+      {kg>0&&costPerKg>0&&<div style={{padding:"10px 14px",background:"rgba(22,163,74,.04)",border:"1px solid rgba(22,163,74,.18)",borderRadius:9,marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
         <div style={{fontSize:12,color:C.text}}>
           <span style={{color:C.muted}}>Cost per kg: </span>
-          <strong style={{color:cpkWarning?"":C.accent,fontSize:14}}> RWF {fmtNum(cpk)}/kg</strong>
-          {cpkWarning&&<span style={{color:C.amber,marginLeft:6,fontSize:11}}>{cpkWarning}</span>}
+          <strong style={{color:C.accent,fontSize:14}}>RWF {fmtNum(costPerKg)}/kg</strong>
         </div>
         <div style={{fontSize:12,color:C.muted}}>
-          Total: <strong style={{color:C.amber}}>RWF {fmtNum(Math.round(cost))}</strong> for {kg}kg
+          Total: <strong style={{color:C.amber,fontSize:14}}>RWF {fmtNum(totalCost)}</strong> for {kg}kg
         </div>
       </div>}
 
@@ -3929,17 +4275,17 @@ function FEntry({user,pigs,feeds,setFeeds}){
         <input placeholder="e.g. morning feed, pig seemed healthy, mixed with water..." value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} style={S.inp}/>
       </div>
       <button
-        disabled={!form.kg||!form.cost||parseFloat(form.kg)<=0||parseFloat(form.cost)<=0}
-        style={{...S.btn(C.amber),color:"#fff",width:"100%",padding:12,fontSize:14,opacity:(!form.kg||!form.cost)?0.5:1}}
+        disabled={!form.kg||!form.costPerKg||parseFloat(form.kg)<=0||parseFloat(form.costPerKg)<=0}
+        style={{...S.btn(C.amber),color:"#fff",width:"100%",padding:12,fontSize:14,opacity:(!form.kg||!form.costPerKg)?0.5:1}}
         onClick={trySubmit}>
         💾 Save Feeding Log →
       </button>
-      {(!form.kg||!form.cost)&&<div style={{fontSize:11,color:C.faint,marginTop:7,textAlign:"center"}}>Enter kg and cost to save</div>}
+      {(!form.kg||!form.costPerKg)&&<div style={{fontSize:11,color:C.faint,marginTop:7,textAlign:"center"}}>Enter kg and cost per kg to save</div>}
     </div>
   </div>);
 }
 
-function SEntry({user,pigs,setPigs,sales,setSales}){
+function SEntry({user,pigs,setPigs,sales,setSales,capital,setCapital}){
   const [form,setForm]=useState({pigId:"",buyer:"",weight:"",priceKg:"",total:"",notes:""});
   const [saved,setSaved]=useState(false);
   const [confirm,setConfirm]=useState(false);
@@ -3952,6 +4298,8 @@ function SEntry({user,pigs,setPigs,sales,setSales}){
     const newSale={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:parseFloat(form.total)};
     setSales(p=>[...p,newSale]);
     if(form.pigId) setPigs(p=>p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig));
+    // Record capital income
+    if(setCapital) capitalTx(capital,setCapital,{type:"income",category:"Pig Sale",amount:newSale.total,description:`${selPig?selPig.tag+", ":""}${form.weight}kg @ RWF ${form.priceKg}/kg to ${form.buyer||"buyer"}`,date:toDay()});
     try{
       await jbinAppend("sales",newSale);
       setToast({type:"success",message:`Sale of RWF ${Math.round(newSale.total).toLocaleString()} recorded!`});
