@@ -50,10 +50,8 @@ var firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 var db = firebase.firestore();
-window.db = db; // Make db accessible inside babel script
 </script>
 <script type="text/babel">
-const db=window.db; // Access Firebase from window
 const {useState,useEffect,useRef,useCallback}=React;
 const uid=()=>Math.random().toString(36).slice(2,10);
 const toDay=()=>new Date().toISOString().slice(0,10);
@@ -119,14 +117,20 @@ const HEAT_CYCLE=21;
 function getLS(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch{return d;}}
 function setLS(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
 
-/* ─── JSONBin User Storage ─── */
-const JBIN_ID="69c02bc0aa77b81da90b0de5";
+/* ─── JSONBin Storage — Users + All Farm Data ─── */
 const JBIN_KEY="$2a$10$LDktMj7oTNhMBjIidsIPoelQmzqlhnMXDvMyMHbIe9yYope1CnBLO";
-const JBIN_URL="https://api.jsonbin.io/v3/b/"+JBIN_ID;
+const JBIN_USERS_ID="69c02bc0aa77b81da90b0de5"; // existing bin for users
+const JBIN_USERS_URL="https://api.jsonbin.io/v3/b/"+JBIN_USERS_ID;
 
+// We store all farm data (feeds, logs, sales) in a SECOND JSONBin bin
+// IMPORTANT: Create a new bin at jsonbin.io and paste its ID here
+const JBIN_FARM_ID="69c0da0caa77b81da90d88a5";
+const JBIN_FARM_URL="https://api.jsonbin.io/v3/b/"+JBIN_FARM_ID;
+
+/* ── Users ── */
 async function getOnlineUsers(){
   try{
-    const res=await fetch(JBIN_URL+"/latest",{
+    const res=await fetch(JBIN_USERS_URL+"/latest",{
       headers:{"X-Master-Key":JBIN_KEY,"X-Bin-Meta":"false"}
     });
     if(!res.ok) throw new Error("fetch failed "+res.status);
@@ -137,13 +141,45 @@ async function getOnlineUsers(){
 }
 async function setOnlineUsers(users){
   try{
-    const res=await fetch(JBIN_URL,{
+    const res=await fetch(JBIN_USERS_URL,{
       method:"PUT",
       headers:{"Content-Type":"application/json","X-Master-Key":JBIN_KEY},
       body:JSON.stringify({list:users,updatedAt:new Date().toISOString()})
     });
     if(!res.ok) throw new Error("save failed "+res.status);
   }catch(e){console.error("JSONBin setUsers error",e);throw e;}
+}
+
+/* ── Farm Data (feeds, logs, sales) ── */
+async function getOnlineFarmData(){
+  try{
+    const res=await fetch(JBIN_FARM_URL+"/latest",{
+      headers:{"X-Master-Key":JBIN_KEY,"X-Bin-Meta":"false"}
+    });
+    if(!res.ok) return null;
+    const data=await res.json();
+    return data||null;
+  }catch(e){console.error("JSONBin getFarmData error",e);return null;}
+}
+async function setOnlineFarmData(data){
+  try{
+    const res=await fetch(JBIN_FARM_URL,{
+      method:"PUT",
+      headers:{"Content-Type":"application/json","X-Master-Key":JBIN_KEY},
+      body:JSON.stringify({...data,updatedAt:new Date().toISOString()})
+    });
+    if(!res.ok) throw new Error("save failed "+res.status);
+  }catch(e){console.error("JSONBin setFarmData error",e);throw e;}
+}
+// Safely append one item to a farm data array
+async function jbinAppend(key,newItem){
+  try{
+    const data=await getOnlineFarmData()||{};
+    const existing=data[key]||[];
+    // Avoid duplicates by id
+    const merged=[...existing.filter(x=>x.id!==newItem.id),newItem];
+    await setOnlineFarmData({...data,[key]:merged});
+  }catch(e){console.error("jbinAppend error",key,e);throw e;}
 }
 async function getOnlineSession(){
   try{
@@ -160,27 +196,13 @@ async function setOnlineSession(user){
 
 /* ─── Firestore Generic Sync Helpers ─── */
 async function fsSet(key,list){
-  try{await window.db.collection("farmiq").doc(key).set({list,updatedAt:new Date().toISOString()});}
+  try{await db.collection("farmiq").doc(key).set({list,updatedAt:new Date().toISOString()});}
   catch(e){console.error("fsSet error",key,e);}
 }
-// fsAdd: safely appends one item - reads first then writes to avoid overwriting
-async function fsAdd(key,newItem){
-  const ref=window.db.collection("farmiq").doc(key);
-  try{
-    const doc=await ref.get();
-    const existing=(doc.exists&&doc.data()&&doc.data().list)||[];
-    // Remove any existing item with same id, then add new one
-    const merged=[...existing.filter(x=>x.id!==newItem.id),newItem];
-    await ref.set({list:merged,updatedAt:new Date().toISOString()});
-  }catch(e){console.error("fsAdd error",key,e);throw e;}
-}
 function fsListen(key,setter,setLoaded,fallback){
-  return window.db.collection("farmiq").doc(key).onSnapshot({includeMetadataChanges:false},doc=>{
-    if(doc.exists&&doc.data()&&doc.data().list){
-      setter([...doc.data().list]); // spread to force new array reference & re-render
-    } else if(fallback!==undefined){
-      setter(fallback);
-    }
+  return db.collection("farmiq").doc(key).onSnapshot(doc=>{
+    if(doc.exists&&doc.data().list) setter(doc.data().list);
+    else if(fallback!==undefined) setter(fallback);
     if(setLoaded) setLoaded(true);
   },err=>{
     console.error("fsListen error",key,err);
@@ -1642,15 +1664,36 @@ function App(){
       setUsersLoaded(true);
     }).catch(()=>setUsersLoaded(true));
 
-    // Poll JSONBin every 15 seconds for new workers
-    const poll=setInterval(async()=>{
+    // Load farm data from JSONBin on startup
+    getOnlineFarmData().then(data=>{
+      if(data){
+        if(data.logs&&data.logs.length>0) setLogs([...data.logs]);
+        if(data.feeds&&data.feeds.length>0) setFeeds([...data.feeds]);
+        if(data.sales&&data.sales.length>0) setSales([...data.sales]);
+      }
+    }).catch(e=>console.error("initial farm load error",e));
+
+    // Poll JSONBin every 10 seconds for new workers
+    const pollUsers=setInterval(async()=>{
       try{
         const fresh=await getOnlineUsers();
         if(fresh&&fresh.length>0) setUsers([...fresh]);
       }catch(e){}
-    },15000);
+    },10000);
 
-    return()=>{clearInterval(poll);};
+    // Poll JSONBin every 10 seconds for new farm data (feeds, logs, sales)
+    const pollFarm=setInterval(async()=>{
+      try{
+        const data=await getOnlineFarmData();
+        if(data){
+          if(data.logs&&data.logs.length>0) setLogs([...data.logs]);
+          if(data.feeds&&data.feeds.length>0) setFeeds([...data.feeds]);
+          if(data.sales&&data.sales.length>0) setSales([...data.sales]);
+        }
+      }catch(e){}
+    },10000);
+
+    return()=>{clearInterval(pollUsers);clearInterval(pollFarm);};
   },[]);
 
   // Persist users online whenever they change (after load)
@@ -1674,20 +1717,31 @@ function App(){
     return()=>unsubs.forEach(u=>u());
   },[]);
 
-  // NOTE: No auto-save effects here.
-  // Each action (worker submit, admin edit) writes directly to Firestore.
-  // This prevents race conditions where one client overwrites another's data.
+  // Save to Firestore whenever data changes (after initial load)
+  useEffect(()=>{if(pigsLoaded)     fsSet("pigs",pigs);},[pigs,pigsLoaded]);
+  useEffect(()=>{if(feedsLoaded)    fsSet("feeds",feeds);},[feeds,feedsLoaded]);
+  useEffect(()=>{if(salesLoaded)    fsSet("sales",sales);},[sales,salesLoaded]);
+  useEffect(()=>{if(logsLoaded)     fsSet("logs",logs);},[logs,logsLoaded]);
+  useEffect(()=>{if(expensesLoaded) fsSet("expenses",expenses);},[expenses,expensesLoaded]);
+  useEffect(()=>{if(incomesLoaded)  fsSet("incomes",incomes);},[incomes,incomesLoaded]);
+  useEffect(()=>{if(messagesLoaded) fsSet("messages",messages);},[messages,messagesLoaded]);
+  useEffect(()=>{if(reproLoaded)    fsSet("reproductions",reproductions);},[reproductions,reproLoaded]);
+  useEffect(()=>{if(stockLoaded)    fsSet("stock",stock);},[stock,stockLoaded]);
 
   // Firestore real-time listener for remote work sessions
   useEffect(()=>{
-    const unsub=window.db.collection("farmiq").doc("remoteSessions").onSnapshot(doc=>{
+    const unsub=db.collection("farmiq").doc("remoteSessions").onSnapshot(doc=>{
       if(doc.exists&&doc.data().list) setSessions(doc.data().list);
       else setSessions([]);
       setSessionsLoaded(true);
     },err=>{ console.error("Sessions listener error",err); setSessionsLoaded(true); });
     return()=>unsub();
   },[]);
-  // Sessions are saved directly when created/updated - no auto-save effect needed
+  // Save sessions to Firestore whenever they change
+  useEffect(()=>{
+    if(!sessionsLoaded) return;
+    db.collection("farmiq").doc("remoteSessions").set({list:sessions,updatedAt:new Date().toISOString()});
+  },[sessions,sessionsLoaded]);
 
   // Timeout fallback — if Firebase takes too long, show app anyway
   const [forceShow,setForceShow]=useState(false);
@@ -2365,7 +2419,7 @@ function DEntry({user,pigs,logs,setLogs}){
     const newLog={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay()};
     setLogs(p=>[...p,newLog]);
     try{
-      await fsAdd("logs", newLog);
+      await jbinAppend("logs",newLog);
       setDone(true);
     }catch(e){alert("❌ Failed to save. Check internet and try again.");}
   }}>Submit Report →</button>
@@ -2381,7 +2435,7 @@ function FEntry({user,pigs,feeds,setFeeds}){
     const newFeed={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg:parseFloat(form.kg),cost:parseFloat(form.cost)};
     setFeeds(p=>[...p,newFeed]);
     try{
-      await fsAdd("feeds", newFeed);
+      await jbinAppend("feeds",newFeed);
       setSaved(true);
       setTimeout(()=>{setSaved(false);setForm({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});},2000);
     }catch(e){alert("❌ Failed to save. Check internet and try again.");}
@@ -2412,7 +2466,7 @@ function SEntry({user,pigs,setPigs,sales,setSales}){
     setSales(p=>[...p,newSale]);
     if(form.pigId) setPigs(p=>p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig));
     try{
-      await fsAdd("sales", newSale);
+      await jbinAppend("sales",newSale);
       setSaved(true);
       setTimeout(()=>{setSaved(false);setForm({pigId:"",buyer:"",weight:"",priceKg:"",total:"",notes:""});},2000);
     }catch(e){alert("❌ Failed to save. Check internet and try again.");}
