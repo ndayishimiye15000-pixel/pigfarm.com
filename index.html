@@ -50,8 +50,10 @@ var firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 var db = firebase.firestore();
+window.db = db; // Make db accessible inside babel script
 </script>
 <script type="text/babel">
+const db=window.db; // Access Firebase from window
 const {useState,useEffect,useRef,useCallback}=React;
 const uid=()=>Math.random().toString(36).slice(2,10);
 const toDay=()=>new Date().toISOString().slice(0,10);
@@ -158,22 +160,27 @@ async function setOnlineSession(user){
 
 /* ─── Firestore Generic Sync Helpers ─── */
 async function fsSet(key,list){
-  try{await db.collection("farmiq").doc(key).set({list,updatedAt:new Date().toISOString()});}
+  try{await window.db.collection("farmiq").doc(key).set({list,updatedAt:new Date().toISOString()});}
   catch(e){console.error("fsSet error",key,e);}
 }
-// fsAdd: safely appends a single item to a Firestore list without overwriting others
+// fsAdd: safely appends one item - reads first then writes to avoid overwriting
 async function fsAdd(key,newItem){
-  const ref=db.collection("farmiq").doc(key);
+  const ref=window.db.collection("farmiq").doc(key);
   try{
     const doc=await ref.get();
-    const existing=(doc.exists&&doc.data().list)||[];
-    await ref.set({list:[...existing,newItem],updatedAt:new Date().toISOString()});
+    const existing=(doc.exists&&doc.data()&&doc.data().list)||[];
+    // Remove any existing item with same id, then add new one
+    const merged=[...existing.filter(x=>x.id!==newItem.id),newItem];
+    await ref.set({list:merged,updatedAt:new Date().toISOString()});
   }catch(e){console.error("fsAdd error",key,e);throw e;}
 }
 function fsListen(key,setter,setLoaded,fallback){
-  return db.collection("farmiq").doc(key).onSnapshot(doc=>{
-    if(doc.exists&&doc.data().list) setter(doc.data().list);
-    else if(fallback!==undefined) setter(fallback);
+  return window.db.collection("farmiq").doc(key).onSnapshot({includeMetadataChanges:false},doc=>{
+    if(doc.exists&&doc.data()&&doc.data().list){
+      setter([...doc.data().list]); // spread to force new array reference & re-render
+    } else if(fallback!==undefined){
+      setter(fallback);
+    }
     if(setLoaded) setLoaded(true);
   },err=>{
     console.error("fsListen error",key,err);
@@ -1673,18 +1680,14 @@ function App(){
 
   // Firestore real-time listener for remote work sessions
   useEffect(()=>{
-    const unsub=db.collection("farmiq").doc("remoteSessions").onSnapshot(doc=>{
+    const unsub=window.db.collection("farmiq").doc("remoteSessions").onSnapshot(doc=>{
       if(doc.exists&&doc.data().list) setSessions(doc.data().list);
       else setSessions([]);
       setSessionsLoaded(true);
     },err=>{ console.error("Sessions listener error",err); setSessionsLoaded(true); });
     return()=>unsub();
   },[]);
-  // Save sessions to Firestore whenever they change
-  useEffect(()=>{
-    if(!sessionsLoaded) return;
-    db.collection("farmiq").doc("remoteSessions").set({list:sessions,updatedAt:new Date().toISOString()});
-  },[sessions,sessionsLoaded]);
+  // Sessions are saved directly when created/updated - no auto-save effect needed
 
   // Timeout fallback — if Firebase takes too long, show app anyway
   const [forceShow,setForceShow]=useState(false);
@@ -2362,10 +2365,7 @@ function DEntry({user,pigs,logs,setLogs}){
     const newLog={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay()};
     setLogs(p=>[...p,newLog]);
     try{
-      const ref=db.collection("farmiq").doc("logs");
-      const doc=await ref.get();
-      const existing=(doc.exists&&doc.data().list)||[];
-      await ref.set({list:[...existing,newLog],updatedAt:new Date().toISOString()});
+      await fsAdd("logs", newLog);
       setDone(true);
     }catch(e){alert("❌ Failed to save. Check internet and try again.");}
   }}>Submit Report →</button>
@@ -2381,10 +2381,7 @@ function FEntry({user,pigs,feeds,setFeeds}){
     const newFeed={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg:parseFloat(form.kg),cost:parseFloat(form.cost)};
     setFeeds(p=>[...p,newFeed]);
     try{
-      const ref=db.collection("farmiq").doc("feeds");
-      const doc=await ref.get();
-      const existing=(doc.exists&&doc.data().list)||[];
-      await ref.set({list:[...existing,newFeed],updatedAt:new Date().toISOString()});
+      await fsAdd("feeds", newFeed);
       setSaved(true);
       setTimeout(()=>{setSaved(false);setForm({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});},2000);
     }catch(e){alert("❌ Failed to save. Check internet and try again.");}
@@ -2415,10 +2412,7 @@ function SEntry({user,pigs,setPigs,sales,setSales}){
     setSales(p=>[...p,newSale]);
     if(form.pigId) setPigs(p=>p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig));
     try{
-      const ref=db.collection("farmiq").doc("sales");
-      const doc=await ref.get();
-      const existing=(doc.exists&&doc.data().list)||[];
-      await ref.set({list:[...existing,newSale],updatedAt:new Date().toISOString()});
+      await fsAdd("sales", newSale);
       setSaved(true);
       setTimeout(()=>{setSaved(false);setForm({pigId:"",buyer:"",weight:"",priceKg:"",total:"",notes:""});},2000);
     }catch(e){alert("❌ Failed to save. Check internet and try again.");}
