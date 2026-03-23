@@ -4,26 +4,12 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>FarmIQ — AI Pig Farm Management</title>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <!-- Firebase -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>
-// Show loading error if scripts fail to load
-window.onerror = function(msg, src, line, col, err) {
-  document.getElementById("root").innerHTML =
-    "<div style='padding:30px;font-family:sans-serif;text-align:center'>" +
-    "<div style='font-size:40px;margin-bottom:16px'>⚠️</div>" +
-    "<div style='font-size:18px;font-weight:700;color:#dc2626;margin-bottom:8px'>App failed to load</div>" +
-    "<div style='font-size:13px;color:#64748b;margin-bottom:16px'>Error: " + msg + "</div>" +
-    "<div style='font-size:13px;color:#64748b'>Please check your internet connection and refresh the page.</div>" +
-    "<button onclick='location.reload()' style='margin-top:16px;padding:10px 24px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer'>🔄 Refresh</button>" +
-    "</div>";
-  return false;
-};
-</script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:'Segoe UI',system-ui,sans-serif;background:#f0f4f8;color:#1e293b;
@@ -49,13 +35,7 @@ select option{background:#fff;color:#1e293b;}
 </style>
 </head>
 <body>
-<div id="root">
-  <div style="min-height:100vh;background:linear-gradient(135deg,#0f2318 0%,#1a3a2a 100%);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;">
-    <div style="width:56px;height:56px;border-radius:16px;background:rgba(74,222,128,.12);border:1px solid rgba(74,222,128,.25);display:flex;align-items:center;justify-content:center;font-size:26px;">🐷</div>
-    <div style="color:#4ade80;font-size:14px;font-weight:600;letter-spacing:2px;font-family:sans-serif;">LOADING FARMIQ…</div>
-    <div style="font-size:12px;color:rgba(255,255,255,.4);font-family:sans-serif;">Please wait, connecting…</div>
-  </div>
-</div>
+<div id="root"></div>
 <div id="pdf-frame"></div>
 <script>
 // Initialize Firebase before React
@@ -72,18 +52,6 @@ firebase.initializeApp(firebaseConfig);
 var db = firebase.firestore();
 </script>
 <script type="text/babel">
-// Safety check — if React or Firebase didn't load, show error
-if(typeof React==="undefined"||typeof firebase==="undefined"){
-  document.getElementById("root").innerHTML=
-    "<div style='padding:30px;font-family:sans-serif;text-align:center'>" +
-    "<div style='font-size:40px;margin-bottom:16px'>📶</div>" +
-    "<div style='font-size:18px;font-weight:700;color:#dc2626;margin-bottom:8px'>Failed to load app</div>" +
-    "<div style='font-size:13px;color:#64748b;margin-bottom:4px'>Could not connect to required services.</div>" +
-    "<div style='font-size:13px;color:#64748b;margin-bottom:16px'>Make sure you have a working internet connection.</div>" +
-    "<button onclick='location.reload()' style='padding:10px 24px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;font-family:sans-serif'>🔄 Try Again</button>" +
-    "</div>";
-  throw new Error("React or Firebase not loaded");
-}
 const {useState,useEffect,useRef,useCallback}=React;
 const uid=()=>Math.random().toString(36).slice(2,10);
 const toDay=()=>new Date().toISOString().slice(0,10);
@@ -193,26 +161,19 @@ async function fsSet(key,list){
   try{await db.collection("farmiq").doc(key).set({list,updatedAt:new Date().toISOString()});}
   catch(e){console.error("fsSet error",key,e);}
 }
-
-// fsAppend: safely adds new items without overwriting other clients' data.
-// Reads current Firestore list, merges new items by id, then writes back.
-// This fixes the race condition where admin and worker overwrite each other.
-async function fsAppend(key,newItems){
+// fsAdd: safely appends a single item to a Firestore list without overwriting others
+async function fsAdd(key,newItem){
   const ref=db.collection("farmiq").doc(key);
-  const doc=await ref.get();
-  const existing=(doc.exists&&doc.data().list)||[];
-  const newIds=new Set(newItems.map(x=>x.id));
-  const merged=[...existing.filter(x=>!newIds.has(x.id)),...newItems];
-  await ref.set({list:merged,updatedAt:new Date().toISOString()});
+  try{
+    const doc=await ref.get();
+    const existing=(doc.exists&&doc.data().list)||[];
+    await ref.set({list:[...existing,newItem],updatedAt:new Date().toISOString()});
+  }catch(e){console.error("fsAdd error",key,e);throw e;}
 }
-
-// fsListen: real-time listener. Stores last snapshot JSON in lastRemoteRef
-// so save effects can detect whether a state change is truly local or a Firestore echo.
-function fsListen(key,setter,setLoaded,fallback,lastRemoteRef){
+function fsListen(key,setter,setLoaded,fallback){
   return db.collection("farmiq").doc(key).onSnapshot(doc=>{
-    const incoming=(doc.exists&&doc.data().list)||(fallback||[]);
-    if(lastRemoteRef) lastRemoteRef.current=JSON.stringify(incoming);
-    setter(incoming);
+    if(doc.exists&&doc.data().list) setter(doc.data().list);
+    else if(fallback!==undefined) setter(fallback);
     if(setLoaded) setLoaded(true);
   },err=>{
     console.error("fsListen error",key,err);
@@ -1656,20 +1617,6 @@ function App(){
   const [page,setPage]=useState("home");
   const [showApiModal,setShowApiModal]=useState(false);
 
-  // Refs store the last JSON snapshot received FROM Firestore.
-  // Save effects compare current state JSON against this to skip echo-saves
-  // (prevents admin or worker overwriting each other's fresh data).
-  const pigsRemote=useRef("");
-  const feedsRemote=useRef("");
-  const salesRemote=useRef("");
-  const logsRemote=useRef("");
-  const expensesRemote=useRef("");
-  const incomesRemote=useRef("");
-  const messagesRemote=useRef("");
-  const reproRemote=useRef("");
-  const stockRemote=useRef("");
-  const sessionsRemote=useRef(false);
-
   // Load users from JSONBin on mount + poll every 15s
   useEffect(()=>{
     // Initial session load
@@ -1705,88 +1652,37 @@ function App(){
   useEffect(()=>{if(sessionLoaded) setOnlineSession(user);},[user,sessionLoaded]);
 
   // Firestore real-time listeners — all farm data
-  // We pass fromRemote refs so the save effects know to skip saving when
-  // the state was just set by an incoming Firestore snapshot (not a local user action).
   useEffect(()=>{
     const unsubs=[
-      fsListen("pigs",      setPigs,      setPigsLoaded,     INIT_PIGS,    pigsRemote),
-      fsListen("feeds",     setFeeds,     setFeedsLoaded,    [],           feedsRemote),
-      fsListen("sales",     setSales,     setSalesLoaded,    [],           salesRemote),
-      fsListen("logs",      setLogs,      setLogsLoaded,     [],           logsRemote),
-      fsListen("expenses",  setExpenses,  setExpensesLoaded, [],           expensesRemote),
-      fsListen("incomes",   setIncomes,   setIncomesLoaded,  [],           incomesRemote),
-      fsListen("messages",  setMessages,  setMessagesLoaded, [],           messagesRemote),
-      fsListen("reproductions",setReproductions,setReproLoaded,[],         reproRemote),
-      fsListen("stock",     setStock,     setStockLoaded,    INIT_STOCK,   stockRemote),
+      fsListen("pigs",      setPigs,      setPigsLoaded,     INIT_PIGS),
+      fsListen("feeds",     setFeeds,     setFeedsLoaded,    []),
+      fsListen("sales",     setSales,     setSalesLoaded,    []),
+      fsListen("logs",      setLogs,      setLogsLoaded,     []),
+      fsListen("expenses",  setExpenses,  setExpensesLoaded, []),
+      fsListen("incomes",   setIncomes,   setIncomesLoaded,  []),
+      fsListen("messages",  setMessages,  setMessagesLoaded, []),
+      fsListen("reproductions",setReproductions,setReproLoaded,[]),
+      fsListen("stock",     setStock,     setStockLoaded,    INIT_STOCK),
     ];
     return()=>unsubs.forEach(u=>u());
   },[]);
 
-  // Save to Firestore only when data changed LOCALLY (not as an echo of a remote snapshot).
-  // We compare JSON of current state against last snapshot received from Firestore.
-  // For worker-submitted collections (feeds, sales, logs) we use fsAppend to safely
-  // merge items instead of overwriting — this prevents admin's open session from
-  // wiping a worker's just-submitted entry.
-  useEffect(()=>{
-    if(!pigsLoaded) return;
-    if(JSON.stringify(pigs)===pigsRemote.current) return;
-    fsSet("pigs",pigs);
-  },[pigs,pigsLoaded]);
-  useEffect(()=>{
-    if(!feedsLoaded) return;
-    if(JSON.stringify(feeds)===feedsRemote.current) return;
-    fsAppend("feeds",feeds);
-  },[feeds,feedsLoaded]);
-  useEffect(()=>{
-    if(!salesLoaded) return;
-    if(JSON.stringify(sales)===salesRemote.current) return;
-    fsAppend("sales",sales);
-  },[sales,salesLoaded]);
-  useEffect(()=>{
-    if(!logsLoaded) return;
-    if(JSON.stringify(logs)===logsRemote.current) return;
-    fsAppend("logs",logs);
-  },[logs,logsLoaded]);
-  useEffect(()=>{
-    if(!expensesLoaded) return;
-    if(JSON.stringify(expenses)===expensesRemote.current) return;
-    fsSet("expenses",expenses);
-  },[expenses,expensesLoaded]);
-  useEffect(()=>{
-    if(!incomesLoaded) return;
-    if(JSON.stringify(incomes)===incomesRemote.current) return;
-    fsSet("incomes",incomes);
-  },[incomes,incomesLoaded]);
-  useEffect(()=>{
-    if(!messagesLoaded) return;
-    if(JSON.stringify(messages)===messagesRemote.current) return;
-    fsSet("messages",messages);
-  },[messages,messagesLoaded]);
-  useEffect(()=>{
-    if(!reproLoaded) return;
-    if(JSON.stringify(reproductions)===reproRemote.current) return;
-    fsSet("reproductions",reproductions);
-  },[reproductions,reproLoaded]);
-  useEffect(()=>{
-    if(!stockLoaded) return;
-    if(JSON.stringify(stock)===stockRemote.current) return;
-    fsSet("stock",stock);
-  },[stock,stockLoaded]);
+  // NOTE: No auto-save effects here.
+  // Each action (worker submit, admin edit) writes directly to Firestore.
+  // This prevents race conditions where one client overwrites another's data.
 
   // Firestore real-time listener for remote work sessions
   useEffect(()=>{
     const unsub=db.collection("farmiq").doc("remoteSessions").onSnapshot(doc=>{
-      sessionsRemote.current=true;
       if(doc.exists&&doc.data().list) setSessions(doc.data().list);
       else setSessions([]);
       setSessionsLoaded(true);
     },err=>{ console.error("Sessions listener error",err); setSessionsLoaded(true); });
     return()=>unsub();
   },[]);
-  // Save sessions to Firestore only on local changes (not when Firestore pushed them in)
+  // Save sessions to Firestore whenever they change
   useEffect(()=>{
     if(!sessionsLoaded) return;
-    if(sessionsRemote.current){sessionsRemote.current=false;return;}
     db.collection("farmiq").doc("remoteSessions").set({list:sessions,updatedAt:new Date().toISOString()});
   },[sessions,sessionsLoaded]);
 
@@ -1822,7 +1718,6 @@ function App(){
     {id:"daylogs",l:"📋 Daily Logs"},
     {id:"messages",l:"📢 Messages"+(messages.length?" ("+messages.length+")":"")},
     {id:"workers",l:"👷 Workers"+(pending.length?" ("+pending.length+")":"")},
-    {id:"workerdata",l:"📂 Worker Data"},
     {id:"remote",l:"🖥️ Remote Work"+(sessions.filter(s=>s.status==="pending").length?" ⚠️"+sessions.filter(s=>s.status==="pending").length:"")}
   ];
   const workerNav=[
@@ -1903,7 +1798,6 @@ function App(){
       {isAdmin&&page==="daylogs"&&<DLogs logs={logs} pigs={pigs} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} allData={allData}/>}
       {isAdmin&&page==="messages"&&<AIMessages users={users} messages={messages} setMessages={setMessages} pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
       {isAdmin&&page==="workers"&&<Workers users={users} setUsers={setUsers}/>}
-      {isAdmin&&page==="workerdata"&&<WorkerData users={users} logs={logs} feeds={feeds} sales={sales} pigs={pigs}/>}
       {isAdmin&&page==="remote"&&<RemoteWorkAdmin sessions={sessions} setSessions={setSessions} users={users}/>}
       {!isAdmin&&page==="home"&&<WHome user={user} logs={logs} feeds={feeds} sales={sales} messages={messages}/>}
       {!isAdmin&&page==="inbox"&&<WorkerInbox messages={messages}/>}
@@ -2409,138 +2303,6 @@ function Workers({users,setUsers}){
   </div>);
 }
 
-/* ─── Admin: Worker Data View ─── */
-function WorkerData({users,logs,feeds,sales,pigs}){
-  const workers=users.filter(u=>u.role==="worker"&&u.approved);
-  const [selected,setSelected]=React.useState(workers[0]?.id||"all");
-  const [tab,setTab]=React.useState("logs");
-
-  const filterW=arr=>selected==="all"?arr:arr.filter(x=>x.workerId===selected);
-  const wLogs=filterW(logs);
-  const wFeeds=filterW(feeds);
-  const wSales=filterW(sales);
-
-  const workerOptions=[{id:"all",name:"All Workers"},...workers];
-
-  return(<div>
-    <div style={S.h1}>👷 Worker Activity Data</div>
-    <div style={S.sub}>View every submission made by your workers</div>
-
-    {/* Worker selector */}
-    <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
-      {workerOptions.map(w=>(
-        <button key={w.id} onClick={()=>setSelected(w.id)} style={{
-          padding:"7px 16px",borderRadius:20,border:"1.5px solid "+(selected===w.id?C.accent:C.border),
-          background:selected===w.id?C.accentSoft:"transparent",
-          color:selected===w.id?C.accent:C.muted,
-          fontWeight:selected===w.id?700:500,fontSize:12,cursor:"pointer",fontFamily:"inherit"
-        }}>{w.name}{w.id!=="all"&&<span style={{marginLeft:6,fontSize:10,color:C.faint}}>
-          ({logs.filter(l=>l.workerId===w.id).length}L · {feeds.filter(f=>f.workerId===w.id).length}F · {sales.filter(s=>s.workerId===w.id).length}S)
-        </span>}</button>
-      ))}
-    </div>
-
-    {/* Summary stats for selected worker(s) */}
-    <div style={S.g4}>
-      {[
-        {l:"Daily Reports",v:wLogs.length,c:C.accent},
-        {l:"Feeding Logs",v:wFeeds.length,c:C.amber},
-        {l:"Sales Made",v:wSales.length,c:"#10b981"},
-        {l:"Revenue Generated",v:fmtRWF(wSales.reduce((s,x)=>s+(x.total||0),0)),c:C.purple}
-      ].map(s=>(
-        <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c,fontSize:s.v?.toString().length>8?14:22}}>{s.v}</div></div>
-      ))}
-    </div>
-
-    {/* Tabs */}
-    <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border}}>
-      {[["logs","📝 Daily Reports"],["feeds","🌾 Feeding Logs"],["sales","🏷️ Sales"]].map(([t,l])=>(
-        <button key={t} style={S.tab(tab===t)} onClick={()=>setTab(t)}>{l}</button>
-      ))}
-    </div>
-
-    {/* Daily Logs tab */}
-    {tab==="logs"&&(<div>
-      {wLogs.length===0&&<div style={{...S.card,color:C.faint,fontSize:13,textAlign:"center"}}>No daily reports found.</div>}
-      {wLogs.slice().reverse().map((log,i)=>(
-        <div key={i} style={S.card}>
-          <div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}>
-            <div style={{fontWeight:700,color:C.text}}>{log.worker} <span style={{fontSize:11,color:C.faint,fontWeight:400}}>@{users.find(u=>u.id===log.workerId)?.username||""}</span></div>
-            <span style={{fontSize:11,color:C.faint}}>{log.date}</span>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:7,marginBottom:7}}>
-            {[["Checked",log.checked],["Sick",log.sick],["Deaths",log.deaths],["Births",log.births],["Water",log.water?"✓":"✗"],["Cleaned",log.cleaned?"✓":"✗"]].map(([l,v])=>(
-              <div key={l} style={{background:C.elevated,borderRadius:5,padding:"5px 9px"}}>
-                <div style={{fontSize:9,color:C.faint}}>{l}</div>
-                <div style={{color:(l==="Sick"||l==="Deaths")&&v>0?C.red:C.text,marginTop:2,fontSize:12}}>{v}</div>
-              </div>
-            ))}
-          </div>
-          {log.notes&&<div style={{padding:"7px 11px",background:C.elevated,borderRadius:6,fontSize:12,color:C.muted,fontStyle:"italic"}}>"{log.notes}"</div>}
-        </div>
-      ))}
-    </div>)}
-
-    {/* Feeding Logs tab */}
-    {tab==="feeds"&&(<div>
-      {wFeeds.length===0&&<div style={{...S.card,color:C.faint,fontSize:13,textAlign:"center"}}>No feeding logs found.</div>}
-      {wFeeds.slice().reverse().map((f,i)=>{
-        const pig=pigs.find(p=>p.id===f.pigId);
-        return(<div key={i} style={S.card}>
-          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-            <div>
-              <div style={{fontWeight:700,color:C.text}}>{f.worker}</div>
-              <div style={{fontSize:11,color:C.faint}}>{f.date} · {pig?pig.tag:"All pigs"}</div>
-            </div>
-            <div style={{textAlign:"right"}}>
-              <div style={{fontWeight:700,color:C.amber}}>{f.feedType}</div>
-              <div style={{fontSize:12,color:C.muted}}>{f.kg}kg · {fmtRWF(f.cost)}</div>
-            </div>
-          </div>
-          {f.notes&&<div style={{fontSize:11,color:C.faint,fontStyle:"italic"}}>"{f.notes}"</div>}
-        </div>);
-      })}
-      {wFeeds.length>0&&<div style={{...S.card,background:"rgba(245,158,11,.05)",border:"1px solid rgba(245,158,11,.2)"}}>
-        <div style={{display:"flex",justifyContent:"space-between"}}>
-          <span style={{color:C.muted}}>Total feed cost</span>
-          <span style={{color:C.amber,fontWeight:700}}>{fmtRWF(wFeeds.reduce((s,f)=>s+(f.cost||0),0))}</span>
-        </div>
-        <div style={{display:"flex",justifyContent:"space-between",marginTop:6}}>
-          <span style={{color:C.muted}}>Total feed used</span>
-          <span style={{color:C.amber,fontWeight:700}}>{wFeeds.reduce((s,f)=>s+(f.kg||0),0).toFixed(1)} kg</span>
-        </div>
-      </div>}
-    </div>)}
-
-    {/* Sales tab */}
-    {tab==="sales"&&(<div>
-      {wSales.length===0&&<div style={{...S.card,color:C.faint,fontSize:13,textAlign:"center"}}>No sales found.</div>}
-      {wSales.slice().reverse().map((s,i)=>{
-        const pig=pigs.find(p=>p.id===s.pigId);
-        return(<div key={i} style={S.card}>
-          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-            <div>
-              <div style={{fontWeight:700,color:C.text}}>{s.worker}</div>
-              <div style={{fontSize:11,color:C.faint}}>{s.date} · Pig: {pig?pig.tag:"—"} · Buyer: {s.buyer||"—"}</div>
-            </div>
-            <div style={{textAlign:"right"}}>
-              <div style={{fontWeight:700,color:"#10b981",fontSize:15}}>{fmtRWF(s.total)}</div>
-              <div style={{fontSize:11,color:C.muted}}>{s.weight||0}kg @ RWF{fmtNum(s.priceKg)}/kg</div>
-            </div>
-          </div>
-          {s.notes&&<div style={{fontSize:11,color:C.faint,fontStyle:"italic"}}>"{s.notes}"</div>}
-        </div>);
-      })}
-      {wSales.length>0&&<div style={{...S.card,background:"rgba(16,185,129,.05)",border:"1px solid rgba(16,185,129,.2)"}}>
-        <div style={{display:"flex",justifyContent:"space-between"}}>
-          <span style={{color:C.muted}}>Total revenue from {wSales.length} sale(s)</span>
-          <span style={{color:"#10b981",fontWeight:800,fontSize:15}}>{fmtRWF(wSales.reduce((s,x)=>s+(x.total||0),0))}</span>
-        </div>
-      </div>}
-    </div>)}
-  </div>);
-}
-
 /* ─── Worker Views ─── */
 function WHome({user,logs,feeds,sales,messages}){
   const ml=logs.filter(l=>l.workerId===user.id);
@@ -2596,7 +2358,17 @@ function DEntry({user,pigs,logs,setLogs}){
       ))}
     </div>
     <div style={{marginBottom:12}}><label style={S.lbl}>Notes</label><textarea rows={3} value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="Any observations..." style={{...S.inp,resize:"vertical"}}/></div>
-    <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={async()=>{const newLog={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay()};setLogs(p=>[...p,newLog]);try{await fsAppend("logs",[newLog]);setDone(true);}catch(e){alert("❌ Failed to save! Check your internet connection and try again.");}}}>Submit Report →</button>
+    <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={async()=>{
+    const newLog={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay()};
+    setLogs(p=>[...p,newLog]);
+    try{
+      const ref=db.collection("farmiq").doc("logs");
+      const doc=await ref.get();
+      const existing=(doc.exists&&doc.data().list)||[];
+      await ref.set({list:[...existing,newLog],updatedAt:new Date().toISOString()});
+      setDone(true);
+    }catch(e){alert("❌ Failed to save. Check internet and try again.");}
+  }}>Submit Report →</button>
   </div></div>);
 }
 
@@ -2604,7 +2376,19 @@ function FEntry({user,pigs,feeds,setFeeds}){
   const [form,setForm]=useState({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});
   const [saved,setSaved]=useState(false);
   const active=pigs.filter(p=>p.status==="active");
-  async function submit(){if(!form.kg||!form.cost)return;const newFeed={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg:parseFloat(form.kg),cost:parseFloat(form.cost)};setFeeds(p=>[...p,newFeed]);try{await fsAppend("feeds",[newFeed]);setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});},2000);}catch(e){alert("❌ Failed to save! Check your internet and try again.");}}
+  async function submit(){
+    if(!form.kg||!form.cost)return;
+    const newFeed={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg:parseFloat(form.kg),cost:parseFloat(form.cost)};
+    setFeeds(p=>[...p,newFeed]);
+    try{
+      const ref=db.collection("farmiq").doc("feeds");
+      const doc=await ref.get();
+      const existing=(doc.exists&&doc.data().list)||[];
+      await ref.set({list:[...existing,newFeed],updatedAt:new Date().toISOString()});
+      setSaved(true);
+      setTimeout(()=>{setSaved(false);setForm({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});},2000);
+    }catch(e){alert("❌ Failed to save. Check internet and try again.");}
+  }
   return(<div style={{maxWidth:490}}><div style={S.h1}>Log Feeding</div>
     {saved&&<div style={{padding:10,background:C.accentSoft,borderRadius:7,marginBottom:12,color:C.accent,fontSize:13}}>✓ Saved!</div>}
     <div style={S.card}>
@@ -2625,7 +2409,20 @@ function SEntry({user,pigs,setPigs,sales,setSales}){
   const [saved,setSaved]=useState(false);
   const active=pigs.filter(p=>p.status==="active");
   function upd(f){return f.weight&&f.priceKg?{...f,total:(parseFloat(f.weight)*parseFloat(f.priceKg)).toString()}:f;}
-  async function submit(){if(!form.total)return;const newSale={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:parseFloat(form.total)};setSales(p=>[...p,newSale]);try{await fsAppend("sales",[newSale]);if(form.pigId)setPigs(p=>p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig));setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",buyer:"",weight:"",priceKg:"",total:"",notes:""});},2000);}catch(e){alert("❌ Sale not saved! Check internet and try again.");}
+  async function submit(){
+    if(!form.total)return;
+    const newSale={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:parseFloat(form.total)};
+    setSales(p=>[...p,newSale]);
+    if(form.pigId) setPigs(p=>p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig));
+    try{
+      const ref=db.collection("farmiq").doc("sales");
+      const doc=await ref.get();
+      const existing=(doc.exists&&doc.data().list)||[];
+      await ref.set({list:[...existing,newSale],updatedAt:new Date().toISOString()});
+      setSaved(true);
+      setTimeout(()=>{setSaved(false);setForm({pigId:"",buyer:"",weight:"",priceKg:"",total:"",notes:""});},2000);
+    }catch(e){alert("❌ Failed to save. Check internet and try again.");}
+  }
   return(<div style={{maxWidth:490}}><div style={S.h1}>Log a Sale</div>
     {saved&&<div style={{padding:10,background:C.accentSoft,borderRadius:7,marginBottom:12,color:C.accent,fontSize:13}}>✓ Sale recorded!</div>}
     <div style={S.card}>
