@@ -1679,16 +1679,24 @@ function App(){
       if(s) setUser(s);
       setSessionLoaded(true);
     });
-    // Load users from JSONBin
+    // Load users from JSONBin — always ensure admin account exists
     getOnlineUsers().then(fresh=>{
       if(fresh&&fresh.length>0){
-        setUsers([...fresh]);
+        // Make sure admin account is always present and correct
+        const hasAdmin=fresh.find(u=>u.role==="admin");
+        if(!hasAdmin){
+          const withAdmin=[...INIT_USERS,...fresh.filter(u=>u.role!=="admin")];
+          setOnlineUsers(withAdmin);
+          setUsers(withAdmin);
+        } else {
+          setUsers([...fresh]);
+        }
       } else {
         setOnlineUsers(INIT_USERS);
         setUsers([...INIT_USERS]);
       }
       setUsersLoaded(true);
-    }).catch(()=>setUsersLoaded(true));
+    }).catch(()=>{setUsers([...INIT_USERS]);setUsersLoaded(true);});
 
     // Load farm data from JSONBin on startup
     getOnlineFarmData().then(data=>{
