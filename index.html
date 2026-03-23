@@ -1679,18 +1679,15 @@ function App(){
       if(s) setUser(s);
       setSessionLoaded(true);
     });
-    // Load users from JSONBin — always ensure admin account exists
+    // Load users from JSONBin — admin credentials always come from INIT_USERS
     getOnlineUsers().then(fresh=>{
       if(fresh&&fresh.length>0){
-        // Make sure admin account is always present and correct
-        const hasAdmin=fresh.find(u=>u.role==="admin");
-        if(!hasAdmin){
-          const withAdmin=[...INIT_USERS,...fresh.filter(u=>u.role!=="admin")];
-          setOnlineUsers(withAdmin);
-          setUsers(withAdmin);
-        } else {
-          setUsers([...fresh]);
-        }
+        // Force admin account from INIT_USERS — never let JSONBin override admin credentials
+        const workers=fresh.filter(u=>u.role!=="admin");
+        const merged=[...INIT_USERS,...workers];
+        setUsers(merged);
+        // Also save back to fix JSONBin
+        setOnlineUsers(merged);
       } else {
         setOnlineUsers(INIT_USERS);
         setUsers([...INIT_USERS]);
