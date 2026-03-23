@@ -2318,7 +2318,10 @@ function Login({users,setUsers,setUser}){
     setErr("");
     if(!form.username||!form.password) return setErr("Please enter username and password.");
     setLoading(true);
-    // Always read freshest users (catches newly approved workers)
+    // First check INIT_USERS (admin always works from hardcoded credentials)
+    const localMatch=INIT_USERS.find(u=>u.username.toLowerCase()===form.username.toLowerCase()&&u.password===form.password);
+    if(localMatch){setLoading(false);setUser(localMatch);return;}
+    // Then check JSONBin for workers
     let freshUsers=await getOnlineUsers();
     if(!freshUsers||freshUsers.length===0) freshUsers=users;
     const u=freshUsers.find(u=>u.username.toLowerCase()===form.username.toLowerCase()&&u.password===form.password);
