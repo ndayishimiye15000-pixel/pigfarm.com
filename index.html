@@ -547,7 +547,7 @@ function PigHealthAI({pig,logs}){
 }
 
 /* ─── REPRODUCTION MODULE ─── */
-function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,logs,expenses,incomes,stock}){
+function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,logs,expenses,incomes,stock,capital,setCapital}){
   const [tab,setTab]=useState("overview");
   const [form,setForm]=useState({sowId:"",boarId:"",matingDate:toDay(),notes:"",method:"Natural Service"});
   const [saved,setSaved]=useState(false);
@@ -582,8 +582,15 @@ function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,log
   }
 
   async function updateStatus(id,status,piglets){
+    const record=reproductions.find(x=>x.id===id);
     const updated=reproductions.map(x=>x.id===id?{...x,status,piglets:piglets||x.piglets,farrowDate:status==="farrowed"?toDay():x.farrowDate}:x);
     setReproductions(updated);
+    // When marked farrowed, record piglet value as capital income
+    if(status==="farrowed"&&piglets>0&&setCapital){
+      const sow=pigs.find(p=>p.id===record?.sowId);
+      const pigletValue=piglets*10000;
+      capitalTx(capital,setCapital,{type:"income",category:"Piglet Sale",amount:pigletValue,description:`${piglets} piglets born from ${sow?sow.tag:"sow"} — est. value @ RWF 10,000/piglet`,date:toDay()});
+    }
     try{
       const data=await getOnlineFarmData()||{};
       await setOnlineFarmData({...data,reproductions:updated});
@@ -885,7 +892,7 @@ function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,log
 
 
 /* ─── STOCK MANAGEMENT ─── */
-function StockManager({stock,setStock,feeds,pigs}){
+function StockManager({stock,setStock,feeds,pigs,capital,setCapital}){
   const [tab,setTab]=useState("inventory");
   const [form,setForm]=useState({name:"",category:"Feed",quantity:"",unit:"kg",minLevel:"",costPerUnit:"",notes:""});
   const [saved,setSaved]=useState(false);
@@ -906,7 +913,14 @@ function StockManager({stock,setStock,feeds,pigs}){
 
   function addItem(){
     if(!form.name||!form.quantity)return;
-    setStock(p=>[...p,{...form,id:uid(),quantity:parseFloat(form.quantity)||0,minLevel:parseFloat(form.minLevel)||0,costPerUnit:parseFloat(form.costPerUnit)||0,lastUpdated:toDay()}]);
+    const qty=parseFloat(form.quantity)||0;
+    const cpu=parseFloat(form.costPerUnit)||0;
+    const totalCost=qty*cpu;
+    setStock(p=>[...p,{...form,id:uid(),quantity:qty,minLevel:parseFloat(form.minLevel)||0,costPerUnit:cpu,lastUpdated:toDay()}]);
+    if(setCapital&&totalCost>0){
+      const cat=form.category==="Medicine"?"Medicine":form.category==="Vaccine"?"Veterinary":form.category==="Feed"?"Feed Purchase":"Equipment";
+      capitalTx(capital,setCapital,{type:"expense",category:cat,amount:totalCost,description:`Purchased ${qty} ${form.unit} of ${form.name}`,date:toDay()});
+    }
     setSaved(true);setTimeout(()=>{setSaved(false);setForm({name:"",category:"Feed",quantity:"",unit:"kg",minLevel:"",costPerUnit:"",notes:""});},2000);
   }
 
@@ -1024,6 +1038,11 @@ function StockManager({stock,setStock,feeds,pigs}){
             <div><label style={S.lbl}>Minimum Level Alert</label><input type="number" placeholder="20" value={form.minLevel} onChange={e=>setForm({...form,minLevel:e.target.value})} style={S.inp}/></div>
             <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Cost Per Unit (RWF)</label><input type="number" placeholder="350" value={form.costPerUnit} onChange={e=>setForm({...form,costPerUnit:e.target.value})} style={S.inp}/></div>
           </div>
+          {form.quantity&&form.costPerUnit&&parseFloat(form.quantity)>0&&parseFloat(form.costPerUnit)>0&&(
+            <div style={{padding:"9px 13px",background:"rgba(239,68,68,.06)",border:"1px solid rgba(239,68,68,.2)",borderRadius:8,marginBottom:12,fontSize:13,color:C.red,fontWeight:600}}>
+              💰 Capital expense: {fmtRWF(parseFloat(form.quantity)*parseFloat(form.costPerUnit))} will be deducted from capital
+            </div>
+          )}
           <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={addItem}>📦 Add to Stock →</button>
         </div>
       </div>
@@ -1905,6 +1924,7 @@ function App(){
     {id:"dailyentry",l:"📝 Daily Report"},
     {id:"feedentry",l:"🌾 Log Feeding"},
     {id:"saleentry",l:"🏷️ Log Sale"},
+    {id:"buyentry",l:"🛒 Log Purchase"},
     {id:"remotework",l:"🖥️ Remote Work"+(sessions.filter(s=>s.workerId===user.id&&s.status==="active").length?" ●":"")},
     {id:"performance",l:"👷 Performance"},
     {id:"weekly",l:"📊 Weekly Report"},
@@ -1975,28 +1995,29 @@ function App(){
       {isAdmin&&page==="ai"&&<AIAdvisor pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
       {isAdmin&&page==="pnl"&&<ProfitLossAnalysis pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} allData={allData}/>}
       {isAdmin&&page==="market"&&<RwandaMarket pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
-      {isAdmin&&page==="reproduction"&&<ReproductionModule pigs={pigs} reproductions={reproductions} setReproductions={setReproductions} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} stock={stock}/>}
-      {isAdmin&&page==="stock"&&<StockManager stock={stock} setStock={setStock} feeds={feeds} pigs={pigs}/>}
+      {isAdmin&&page==="reproduction"&&<ReproductionModule pigs={pigs} reproductions={reproductions} setReproductions={setReproductions} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} stock={stock} capital={capital} setCapital={setCapital}/>}
+      {isAdmin&&page==="stock"&&<StockManager stock={stock} setStock={setStock} feeds={feeds} pigs={pigs} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="ledger"&&<Ledger expenses={expenses} setExpenses={setExpenses} incomes={incomes} setIncomes={setIncomes} feeds={feeds} sales={sales} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="finance"&&<Fin feeds={feeds} sales={sales} pigs={pigs} logs={logs} expenses={expenses} incomes={incomes} allData={allData}/>}
-      {isAdmin&&page==="pigs"&&<Pigs pigs={pigs} setPigs={setPigs} logs={logs} allData={allData}/>}
+      {isAdmin&&page==="pigs"&&<Pigs pigs={pigs} setPigs={setPigs} logs={logs} allData={allData} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="feeding"&&<FeedLog feeds={feeds} setFeeds={setFeeds} pigs={pigs} logs={logs} sales={sales} expenses={expenses} incomes={incomes} allData={allData} user={user}/>}
       {isAdmin&&page==="sales"&&<SaleLog sales={sales} setSales={setSales} pigs={pigs} feeds={feeds} logs={logs} expenses={expenses} incomes={incomes} allData={allData} user={user}/>}
       {isAdmin&&page==="daylogs"&&<DLogs logs={logs} setLogs={setLogs} pigs={pigs} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} allData={allData} user={user}/>}
       {isAdmin&&page==="messages"&&<AIMessages users={users} messages={messages} setMessages={setMessages} pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
       {isAdmin&&page==="workers"&&<Workers users={users} setUsers={setUsers}/>}
       {isAdmin&&page==="remote"&&<RemoteWorkAdmin sessions={sessions} setSessions={setSessions} users={users}/>}
-      {isAdmin&&page==="capital"&&<CapitalManager capital={capital} setCapital={setCapital} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} pigs={pigs}/>}
+      {isAdmin&&page==="capital"&&<CapitalManager capital={capital} setCapital={setCapital} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} pigs={pigs} user={user}/>}
       {!isAdmin&&page==="home"&&<WHome user={user} logs={logs} feeds={feeds} sales={sales} messages={messages}/>}
       {!isAdmin&&page==="inbox"&&<WorkerInbox messages={messages}/>}
       {!isAdmin&&page==="dailyentry"&&<DEntry user={user} pigs={pigs} logs={logs} setLogs={setLogs} capital={capital} setCapital={setCapital}/>}
       {!isAdmin&&page==="feedentry"&&<FEntry user={user} pigs={pigs} feeds={feeds} setFeeds={setFeeds} capital={capital} setCapital={setCapital}/>}
       {!isAdmin&&page==="saleentry"&&<SEntry user={user} pigs={pigs} setPigs={setPigs} sales={sales} setSales={setSales} capital={capital} setCapital={setCapital}/>}
+      {!isAdmin&&page==="buyentry"&&<BEntry user={user} expenses={expenses} setExpenses={setExpenses} capital={capital} setCapital={setCapital}/>}
       {!isAdmin&&page==="remotework"&&<RemoteWorkPanel user={user} sessions={sessions} setSessions={setSessions} messages={messages}/>}
       {isAdmin&&page==="performance"&&<WorkerPerformance users={users} logs={logs} feeds={feeds} sales={sales}/>}
       {isAdmin&&page==="weekly"&&<WeeklyReport pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} users={users} stock={stock}/>}
       {page==="tasks"&&<TaskManager user={user} users={users} tasks={tasks} setTasks={setTasks}/>}
-      {page==="vaccination"&&<VaccinationTracker pigs={pigs} users={users} vaccinations={vaccinations} setVaccinations={setVaccinations} user={user}/>}
+      {page==="vaccination"&&<VaccinationTracker pigs={pigs} users={users} vaccinations={vaccinations} setVaccinations={setVaccinations} user={user} capital={capital} setCapital={setCapital}/>}
       {page==="changepassword"&&<ChangePassword user={user} users={users} setUsers={setUsers}/>}
     </div>
   </div>);
@@ -2676,19 +2697,24 @@ function TaskManager({user,users,tasks,setTasks}){
 /* ═══════════════════════════════════════════════════
    4. VACCINATION TRACKER
 ═══════════════════════════════════════════════════ */
-function VaccinationTracker({pigs,users,vaccinations,setVaccinations,user}){
+function VaccinationTracker({pigs,users,vaccinations,setVaccinations,user,capital,setCapital}){
   const isAdmin=user.role==="admin";
   const active=pigs.filter(p=>p.status==="active");
-  const [form,setForm]=useState({pigId:"",vaccine:"CSF Vaccine",date:toDay(),nextDue:"",notes:"",givenBy:user.name});
+  const [form,setForm]=useState({pigId:"",vaccine:"CSF Vaccine",date:toDay(),nextDue:"",notes:"",givenBy:user.name,cost:""});
   const [saved,setSaved]=useState(false);
   const VACCINES=["CSF Vaccine","FMD Vaccine","Ivermectin","Dewormer","Vitamin B12","Other"];
 
   async function save(){
     if(!form.pigId||!form.date)return;
     const nextDue=form.nextDue||addDays(form.date,180);
+    const cost=parseFloat(form.cost)||0;
     const newVac={...form,id:uid(),nextDue,createdAt:toDay()};
     setVaccinations(p=>[...p,newVac]);
-    try{await jbinAppend("vaccinations",newVac);setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",vaccine:"CSF Vaccine",date:toDay(),nextDue:"",notes:"",givenBy:user.name});},2000);}
+    if(setCapital&&cost>0){
+      const pig=pigs.find(p=>p.id===form.pigId);
+      capitalTx(capital,setCapital,{type:"expense",category:"Veterinary",amount:cost,description:`${form.vaccine} for ${pig?pig.tag:"pig"} — by ${form.givenBy}`,date:form.date});
+    }
+    try{await jbinAppend("vaccinations",newVac);setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",vaccine:"CSF Vaccine",date:toDay(),nextDue:"",notes:"",givenBy:user.name,cost:""});},2000);}
     catch(e){alert("❌ Failed to save.");}
   }
 
@@ -2734,6 +2760,7 @@ function VaccinationTracker({pigs,users,vaccinations,setVaccinations,user}){
         </div>
         <div><label style={S.lbl}>Date Given</label><input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} style={S.inp}/></div>
         <div><label style={S.lbl}>Next Due Date</label><input type="date" value={form.nextDue} onChange={e=>setForm({...form,nextDue:e.target.value})} style={S.inp}/></div>
+        <div><label style={S.lbl}>Cost (RWF) — affects capital</label><input type="number" placeholder="e.g. 2000" value={form.cost} onChange={e=>setForm({...form,cost:e.target.value})} style={S.inp}/>{form.cost&&parseFloat(form.cost)>0&&<div style={{fontSize:11,color:C.red,marginTop:3}}>💰 RWF {fmtNum(parseFloat(form.cost))} will be deducted from capital as Veterinary</div>}</div>
         <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Notes</label><input placeholder="Any observations..." value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} style={S.inp}/></div>
       </div>
       <button onClick={save} style={{...S.btn(C.accent),width:"100%",padding:11,fontSize:14}}>💉 Save Vaccination →</button>
@@ -2764,7 +2791,8 @@ function VaccinationTracker({pigs,users,vaccinations,setVaccinations,user}){
 }
 
 /* ─── Capital Manager (Admin Only) ─── */
-function CapitalManager({capital,setCapital,feeds,sales,expenses,incomes,pigs}){
+function CapitalManager({capital,setCapital,feeds,sales,expenses,incomes,pigs,user}){
+  const isAdmin=user&&user.role==="admin";
   const [tab,setTab]=useState("overview");
   const [form,setForm]=useState({type:"income",category:"Other Income",amount:"",description:"",date:toDay()});
   const [saved,setSaved]=useState(false);
@@ -2799,7 +2827,21 @@ function CapitalManager({capital,setCapital,feeds,sales,expenses,incomes,pigs}){
     setEditId(null);setEditForm(null);
   }
 
-  const tabs=[{id:"overview",l:"📊 Overview"},{id:"add",l:"➕ Add Transaction"},{id:"history",l:"📋 History"}];
+  const [capForm,setCapForm]=useState({amount:"",description:"",date:toDay(),source:"Owner Investment"});
+  const [capSaved,setCapSaved]=useState(false);
+  const CAP_SOURCES=["Owner Investment","Bank Loan","External Investor","Grant/Subsidy","Personal Savings","Other"];
+
+  function addCapital(){
+    if(!capForm.amount||parseFloat(capForm.amount)<=0)return;
+    const amt=parseFloat(capForm.amount);
+    const tx={id:uid(),type:"income",category:"Capital Injection",amount:amt,description:(capForm.description||capForm.source)+" — added by admin",date:capForm.date,source:capForm.source,createdAt:new Date().toISOString(),manual:true};
+    setCapital(prev=>({...prev,initial:(prev.initial||0)+amt,transactions:[...(prev.transactions||[]),tx]}));
+    setCapSaved(true);
+    setCapForm({amount:"",description:"",date:toDay(),source:"Owner Investment"});
+    setTimeout(()=>setCapSaved(false),2500);
+  }
+
+  const tabs=[{id:"overview",l:"📊 Overview"},{id:"inject",l:"💵 Add Capital"},{id:"add",l:"➕ Transaction"},{id:"history",l:"📋 History"}];
 
   return(<div>
     <div style={S.h1}>💵 Capital Management</div>
@@ -2817,10 +2859,10 @@ function CapitalManager({capital,setCapital,feeds,sales,expenses,incomes,pigs}){
           </div>
         ))}
       </div>
-      <button onClick={()=>{setEditInitial(!editInitial);setNewInitial(String(capital.initial||""));}} style={{position:"absolute",top:16,right:16,padding:"6px 12px",borderRadius:8,border:"1px solid rgba(74,222,128,.35)",background:"rgba(74,222,128,.1)",color:"#4ade80",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>⚙️ Edit Initial</button>
+      {isAdmin&&<button onClick={()=>{setEditInitial(!editInitial);setNewInitial(String(capital.initial||""));}} style={{position:"absolute",top:16,right:16,padding:"6px 12px",borderRadius:8,border:"1px solid rgba(74,222,128,.35)",background:"rgba(74,222,128,.1)",color:"#4ade80",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>⚙️ Edit Initial</button>}
     </div>
 
-    {editInitial&&<div style={{...S.card,marginBottom:14,border:"1px solid rgba(74,222,128,.3)"}}>
+    {isAdmin&&editInitial&&<div style={{...S.card,marginBottom:14,border:"1px solid rgba(74,222,128,.3)"}}>
       <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:10}}>Set Initial Capital (before any transactions)</div>
       <div style={{display:"flex",gap:9}}>
         <input type="number" value={newInitial} onChange={e=>setNewInitial(e.target.value)} placeholder="e.g. 1000000" style={{...S.inp,flex:1}}/>
@@ -2861,6 +2903,48 @@ function CapitalManager({capital,setCapital,feeds,sales,expenses,incomes,pigs}){
           </div>
         ))}
         {txs.length>8&&<button onClick={()=>setTab("history")} style={{...S.btn(),width:"100%",marginTop:8,fontSize:12}}>View All {txs.length} Transactions →</button>}
+      </div>
+    </div>)}
+
+    {/* Add Capital (Inject) */}
+    {tab==="inject"&&(<div style={{maxWidth:500}}>
+      {capSaved&&<div style={{padding:12,background:"rgba(74,222,128,.12)",border:"1px solid rgba(74,222,128,.35)",borderRadius:9,marginBottom:14,color:"#4ade80",fontSize:13,fontWeight:700}}>✅ Capital added successfully! Balance updated.</div>}
+      <div style={{background:"linear-gradient(135deg,#0f2318,#1a3d26)",borderRadius:14,padding:"16px 18px",marginBottom:14}}>
+        <div style={{fontSize:11,color:"rgba(74,222,128,.7)",fontWeight:600,letterSpacing:1,textTransform:"uppercase",marginBottom:4}}>Current Balance Before Injection</div>
+        <div style={{fontSize:26,fontWeight:800,color:balance>=0?"#4ade80":"#f87171"}}>{fmtRWF(balance)}</div>
+        {capForm.amount&&parseFloat(capForm.amount)>0&&<div style={{fontSize:13,color:"rgba(74,222,128,.8)",marginTop:6}}>After injection → <strong style={{color:"#4ade80"}}>{fmtRWF(balance+parseFloat(capForm.amount))}</strong></div>}
+      </div>
+      <div style={S.card}>
+        <div style={{fontSize:14,fontWeight:700,color:"#4ade80",marginBottom:4}}>💵 Inject Capital</div>
+        <div style={{fontSize:12,color:C.muted,marginBottom:14}}>Add funds to your business capital — investment, loan, owner contribution, etc.</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+          <div style={{gridColumn:"1/-1"}}>
+            <label style={S.lbl}>Amount (RWF) *</label>
+            <input type="number" min="0" placeholder="e.g. 500000" value={capForm.amount} onChange={e=>setCapForm({...capForm,amount:e.target.value})} style={S.inp}/>
+          </div>
+          <div>
+            <label style={S.lbl}>Source</label>
+            <select value={capForm.source} onChange={e=>setCapForm({...capForm,source:e.target.value})} style={S.inp}>
+              {CAP_SOURCES.map(s=><option key={s}>{s}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={S.lbl}>Date</label>
+            <input type="date" value={capForm.date} onChange={e=>setCapForm({...capForm,date:e.target.value})} style={S.inp}/>
+          </div>
+          <div style={{gridColumn:"1/-1"}}>
+            <label style={S.lbl}>Description (optional)</label>
+            <input placeholder="e.g. Monthly owner contribution, bank loan disbursement…" value={capForm.description} onChange={e=>setCapForm({...capForm,description:e.target.value})} style={S.inp}/>
+          </div>
+        </div>
+        {capForm.amount&&parseFloat(capForm.amount)>0&&<div style={{padding:"10px 14px",background:"rgba(74,222,128,.08)",border:"1px solid rgba(74,222,128,.25)",borderRadius:9,marginBottom:14,fontSize:13,color:"#4ade80",fontWeight:600}}>
+          💰 Capital will increase by {fmtRWF(parseFloat(capForm.amount))} → New balance: {fmtRWF(balance+parseFloat(capForm.amount))}
+        </div>}
+        <button onClick={addCapital} disabled={!capForm.amount||parseFloat(capForm.amount)<=0}
+          style={{background:"linear-gradient(135deg,#16a34a,#15803d)",color:"#fff",border:"none",borderRadius:10,padding:"13px",width:"100%",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:(!capForm.amount||parseFloat(capForm.amount)<=0)?0.5:1}}>
+          💵 Add Capital to Farm →
+        </button>
+        <div style={{fontSize:11,color:C.faint,marginTop:8,textAlign:"center"}}>This increases your initial capital base — visible in Overview and all balance calculations</div>
       </div>
     </div>)}
 
@@ -3505,10 +3589,19 @@ function Fin({feeds,sales,pigs,logs,expenses,incomes,allData}){
 }
 
 /* ─── Pigs ─── */
-function Pigs({pigs,setPigs,logs,allData}){
+function Pigs({pigs,setPigs,logs,allData,capital,setCapital}){
   const [show,setShow]=useState(false);
-  const [form,setForm]=useState({tag:"",breed:"Landrace",gender:"Female",stage:"Piglet",weight:"",dob:""});
-  function add(){if(!form.tag)return;setPigs(p=>[...p,{...form,id:uid(),weight:parseFloat(form.weight)||0,status:"active"}]);setForm({tag:"",breed:"Landrace",gender:"Female",stage:"Piglet",weight:"",dob:""});setShow(false);}
+  const [form,setForm]=useState({tag:"",breed:"Landrace",gender:"Female",stage:"Piglet",weight:"",dob:"",purchasePrice:""});
+  function add(){
+    if(!form.tag)return;
+    const price=parseFloat(form.purchasePrice)||0;
+    setPigs(p=>[...p,{...form,id:uid(),weight:parseFloat(form.weight)||0,status:"active"}]);
+    if(setCapital&&price>0){
+      capitalTx(capital,setCapital,{type:"expense",category:"Pig Purchase",amount:price,description:`Pig ${form.tag} (${form.stage}, ${form.weight||0}kg) purchased`,date:toDay()});
+    }
+    setForm({tag:"",breed:"Landrace",gender:"Female",stage:"Piglet",weight:"",dob:"",purchasePrice:""});
+    setShow(false);
+  }
   const sc={Piglet:"#a78bfa",Weaner:"#60a5fa",Grower:"#10b981",Finisher:C.amber,Gilt:C.pink,Sow:C.red,Boar:"#fb923c"};
   return(<div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
@@ -3523,6 +3616,7 @@ function Pigs({pigs,setPigs,logs,allData}){
         <div><label style={S.lbl}>Breed</label><select value={form.breed} onChange={e=>setForm({...form,breed:e.target.value})} style={S.inp}>{["Landrace","Large White","Duroc","Hampshire","Mixed/Local"].map(o=><option key={o}>{o}</option>)}</select></div>
         <div><label style={S.lbl}>Gender</label><select value={form.gender} onChange={e=>setForm({...form,gender:e.target.value})} style={S.inp}><option>Female</option><option>Male</option></select></div>
         <div><label style={S.lbl}>Stage</label><select value={form.stage} onChange={e=>setForm({...form,stage:e.target.value})} style={S.inp}>{["Piglet","Weaner","Grower","Finisher","Gilt","Sow","Boar"].map(o=><option key={o}>{o}</option>)}</select></div>
+        <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Purchase Price (RWF) — affects capital</label><input type="number" placeholder="e.g. 35000" value={form.purchasePrice} onChange={e=>setForm({...form,purchasePrice:e.target.value})} style={S.inp}/>{form.purchasePrice&&parseFloat(form.purchasePrice)>0&&<div style={{fontSize:11,color:C.red,marginTop:3}}>💰 RWF {fmtNum(parseFloat(form.purchasePrice))} will be deducted from capital as Pig Purchase</div>}</div>
       </div>
       <button style={S.btn()} onClick={add}>Save Pig</button>
       <button style={S.btn("#374151")} onClick={()=>setShow(false)}>Cancel</button>
@@ -4324,6 +4418,138 @@ function SEntry({user,pigs,setPigs,sales,setSales,capital,setCapital}){
       </div>
       <div style={{marginBottom:12}}><label style={S.lbl}>Notes</label><input placeholder="Notes..." value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} style={S.inp}/></div>
       <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={trySubmit}>Record Sale →</button>
+    </div>
+  </div>);
+}
+
+
+function BEntry({user,expenses,setExpenses,capital,setCapital}){
+  const PURCHASE_CATS=["Feed Purchase","Medicine","Veterinary","Equipment","Transport","Labour","Utilities","Maintenance","Pig Purchase","Other"];
+  const [form,setForm]=useState({category:"Feed Purchase",item:"",quantity:"",unit:"kg",unitPrice:"",totalAmount:"",supplier:"",date:toDay(),notes:""});
+  const [confirm,setConfirm]=useState(false);
+  const [saved,setSaved]=useState(false);
+  const [toast,setToast]=useState(null);
+  const closeToast=useCallback(()=>setToast(null),[]);
+
+  const qty=parseFloat(form.quantity)||0;
+  const unitPrice=parseFloat(form.unitPrice)||0;
+  const total=form.totalAmount?parseFloat(form.totalAmount):qty>0&&unitPrice>0?qty*unitPrice:0;
+
+  function updateCalc(f){
+    const q=parseFloat(f.quantity)||0;
+    const u=parseFloat(f.unitPrice)||0;
+    if(q>0&&u>0) return {...f,totalAmount:String(Math.round(q*u))};
+    return f;
+  }
+
+  async function doSave(){
+    setConfirm(false);
+    if(!total||total<=0) return;
+    const newExp={
+      id:uid(),
+      date:form.date,
+      category:form.category,
+      amount:total,
+      description:`${form.item||form.category}${form.quantity?" — "+form.quantity+" "+form.unit:""}${form.supplier?" from "+form.supplier:""}`,
+      worker:user.name,
+      workerId:user.id,
+      item:form.item,
+      quantity:form.quantity,
+      unit:form.unit,
+      unitPrice:form.unitPrice,
+      supplier:form.supplier,
+      notes:form.notes,
+      source:"worker_purchase"
+    };
+    setExpenses(p=>[...p,newExp]);
+    if(setCapital) capitalTx(capital,setCapital,{
+      type:"expense",
+      category:form.category,
+      amount:total,
+      description:`${form.item||form.category}${form.quantity?" "+form.quantity+" "+form.unit:""}${form.supplier?" from "+form.supplier:""} — by ${user.name}`,
+      date:form.date
+    });
+    try{
+      await jbinAppend("expenses",newExp);
+      setToast({type:"success",message:`✅ Purchase of ${fmtRWF(total)} recorded!`});
+      setSaved(true);
+      setTimeout(()=>{
+        setSaved(false);
+        setForm({category:"Feed Purchase",item:"",quantity:"",unit:"kg",unitPrice:"",totalAmount:"",supplier:"",date:toDay(),notes:""});
+      },2200);
+    }catch(e){setToast({type:"error",message:"Failed to save. Check internet."});}
+  }
+
+  function trySubmit(){
+    if(!form.item||!total||total<=0) return;
+    setConfirm(true);
+  }
+
+  return(<div style={{maxWidth:520}}>
+    {confirm&&<ConfirmDialog
+      title="Record This Purchase?"
+      body={`${form.item} — ${form.quantity?form.quantity+" "+form.unit+" @ RWF "+form.unitPrice+"/"+form.unit+" = ":""}RWF ${Math.round(total).toLocaleString()}${form.supplier?" from "+form.supplier:""}. This will be recorded as a ${form.category} expense. Confirm?`}
+      onConfirm={doSave} onCancel={()=>setConfirm(false)}/>}
+    {toast&&<Toast message={toast.message} type={toast.type} onClose={closeToast}/>}
+    <div style={S.h1}>🛒 Log Purchase</div>
+    <div style={S.sub}>Record what you bought — automatically logged as a farm expense</div>
+    {saved&&<div style={{padding:10,background:C.accentSoft,borderRadius:7,marginBottom:12,color:C.accent,fontSize:13}}>✓ Purchase recorded!</div>}
+    <div style={S.card}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        <div style={{gridColumn:"1/-1"}}>
+          <label style={S.lbl}>What did you buy? *</label>
+          <input placeholder="e.g. Maize bran, Ivermectin, Buckets…" value={form.item} onChange={e=>setForm({...form,item:e.target.value})} style={S.inp}/>
+        </div>
+        <div>
+          <label style={S.lbl}>Category</label>
+          <select value={form.category} onChange={e=>setForm({...form,category:e.target.value})} style={S.inp}>
+            {PURCHASE_CATS.map(c=><option key={c}>{c}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={S.lbl}>Date</label>
+          <input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} style={S.inp}/>
+        </div>
+        <div>
+          <label style={S.lbl}>Quantity</label>
+          <input type="number" min="0" placeholder="e.g. 50" value={form.quantity} onChange={e=>setForm(updateCalc({...form,quantity:e.target.value}))} style={S.inp}/>
+        </div>
+        <div>
+          <label style={S.lbl}>Unit</label>
+          <select value={form.unit} onChange={e=>setForm({...form,unit:e.target.value})} style={S.inp}>
+            {["kg","litres","doses","pcs","bags","boxes","heads"].map(u=><option key={u}>{u}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={S.lbl}>Unit Price (RWF)</label>
+          <input type="number" min="0" placeholder="e.g. 350" value={form.unitPrice} onChange={e=>setForm(updateCalc({...form,unitPrice:e.target.value}))} style={S.inp}/>
+        </div>
+        <div>
+          <label style={S.lbl}>Total Amount (RWF) *</label>
+          <input type="number" min="0" placeholder="Auto-calculated" value={form.totalAmount} onChange={e=>setForm({...form,totalAmount:e.target.value})} style={S.inp}/>
+        </div>
+        <div style={{gridColumn:"1/-1"}}>
+          <label style={S.lbl}>Supplier / Where bought</label>
+          <input placeholder="e.g. Kimironko Market, Nyabugogo agrovets…" value={form.supplier} onChange={e=>setForm({...form,supplier:e.target.value})} style={S.inp}/>
+        </div>
+        <div style={{gridColumn:"1/-1"}}>
+          <label style={S.lbl}>Notes</label>
+          <input placeholder="Any additional details…" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} style={S.inp}/>
+        </div>
+      </div>
+
+      {total>0&&<div style={{padding:"10px 14px",background:"rgba(239,68,68,.06)",border:"1px solid rgba(239,68,68,.2)",borderRadius:9,marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+        <div style={{fontSize:12,color:C.muted}}>Total expense: <strong style={{color:C.red,fontSize:15}}>{fmtRWF(total)}</strong></div>
+        <div style={{fontSize:11,color:C.faint}}>Category: <span style={{color:C.text,fontWeight:600}}>{form.category}</span></div>
+      </div>}
+
+      <button
+        disabled={!form.item||!total||total<=0}
+        style={{...S.btn(C.red),color:"#fff",width:"100%",padding:12,fontSize:14,opacity:(!form.item||!total)?0.5:1}}
+        onClick={trySubmit}>
+        🛒 Save Purchase →
+      </button>
+      {(!form.item||!total)&&<div style={{fontSize:11,color:C.faint,marginTop:7,textAlign:"center"}}>Enter item name and total amount to save</div>}
     </div>
   </div>);
 }
