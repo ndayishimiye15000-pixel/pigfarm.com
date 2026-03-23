@@ -182,16 +182,11 @@ async function jbinAppend(key,newItem){
   }catch(e){console.error("jbinAppend error",key,e);throw e;}
 }
 async function getOnlineSession(){
-  try{
-    const v=localStorage.getItem("fiq_session");
-    return v?JSON.parse(v):null;
-  }catch{return null;}
+  // Always return null — login required every time for security
+  return null;
 }
 async function setOnlineSession(user){
-  try{
-    if(user) localStorage.setItem("fiq_session",JSON.stringify(user));
-    else localStorage.removeItem("fiq_session");
-  }catch(e){console.error("Session error",e);}
+  // Session not saved — login required every time for security
 }
 
 /* ─── Firestore Generic Sync Helpers ─── */
@@ -542,21 +537,45 @@ function PigHealthAI({pig,logs}){
 /* ─── REPRODUCTION MODULE ─── */
 function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,logs,expenses,incomes,stock}){
   const [tab,setTab]=useState("overview");
-  const [form,setForm]=useState({sowId:"",boarId:"",matingDate:toDay(),notes:""});
+  const [form,setForm]=useState({sowId:"",boarId:"",matingDate:toDay(),notes:"",method:"Natural Service"});
   const [saved,setSaved]=useState(false);
   const sows=pigs.filter(p=>p.status==="active"&&(p.stage==="Sow"||p.stage==="Gilt"));
   const boars=pigs.filter(p=>p.status==="active"&&p.stage==="Boar");
 
-  function logMating(){
+  const STAGES=[
+    {day:0,  label:"Mating",       icon:"🐖", desc:"Breeding recorded",           color:"#8b5cf6"},
+    {day:21, label:"Heat Check",   icon:"🔍", desc:"Check if returned to heat",    color:"#f59e0b"},
+    {day:35, label:"Confirm Preg", icon:"✅", desc:"Physical signs visible",       color:"#3b82f6"},
+    {day:75, label:"Mid Preg",     icon:"🤰", desc:"Increase feed to 2.5kg/day",   color:"#ec4899"},
+    {day:100,label:"Prep Pen",     icon:"🏠", desc:"Prepare farrowing pen",        color:"#f97316"},
+    {day:110,label:"Near Birth",   icon:"⚠️", desc:"Watch closely, reduce feed",   color:"#ef4444"},
+    {day:114,label:"Farrowing",    icon:"🐣", desc:"Birth expected today!",        color:"#16a34a"},
+  ];
+
+  async function logMating(){
     if(!form.sowId||!form.matingDate)return;
     const expectedFarrow=addDays(form.matingDate,GESTATION);
-    setReproductions(r=>[...r,{id:uid(),sowId:form.sowId,boarId:form.boarId,matingDate:form.matingDate,expectedFarrow,status:"pregnant",piglets:0,notes:form.notes,loggedDate:toDay()}]);
+    const newRecord={
+      id:uid(),sowId:form.sowId,boarId:form.boarId,
+      matingDate:form.matingDate,expectedFarrow,
+      heatCheckDate:addDays(form.matingDate,21),
+      preparePenDate:addDays(form.matingDate,100),
+      method:form.method,status:"pregnant",piglets:0,
+      notes:form.notes,loggedDate:toDay()
+    };
+    setReproductions(r=>[...r,newRecord]);
+    try{await jbinAppend("reproductions",newRecord);}catch(e){console.error(e);}
     setSaved(true);
-    setTimeout(()=>{setSaved(false);setForm({sowId:"",boarId:"",matingDate:toDay(),notes:""});},2000);
+    setTimeout(()=>{setSaved(false);setForm({sowId:"",boarId:"",matingDate:toDay(),notes:"",method:"Natural Service"});},2500);
   }
 
-  function updateStatus(id,status,piglets){
-    setReproductions(r=>r.map(x=>x.id===id?{...x,status,piglets:piglets||x.piglets,farrowDate:status==="farrowed"?toDay():x.farrowDate}:x));
+  async function updateStatus(id,status,piglets){
+    const updated=reproductions.map(x=>x.id===id?{...x,status,piglets:piglets||x.piglets,farrowDate:status==="farrowed"?toDay():x.farrowDate}:x);
+    setReproductions(updated);
+    try{
+      const data=await getOnlineFarmData()||{};
+      await setOnlineFarmData({...data,reproductions:updated});
+    }catch(e){console.error(e);}
   }
 
   const pregnant=reproductions.filter(r=>r.status==="pregnant");
@@ -564,289 +583,294 @@ function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,log
   const upcomingFarrows=pregnant.filter(r=>daysDiff(r.expectedFarrow)<=14&&daysDiff(r.expectedFarrow)>=0);
   const overdue=pregnant.filter(r=>daysDiff(r.expectedFarrow)<0);
   const totalPiglets=farrowed.reduce((s,r)=>s+(r.piglets||0),0);
-  const tabs=["overview","log","schedule","ai"];
+  const avgLitter=farrowed.length>0?(totalPiglets/farrowed.length).toFixed(1):0;
+  const farrowRate=reproductions.length>0?Math.round((farrowed.length/reproductions.length)*100):0;
+
+  function pregProgress(matingDate){
+    const elapsed=GESTATION-daysDiff(addDays(matingDate,GESTATION));
+    return Math.min(100,Math.max(0,Math.round((elapsed/GESTATION)*100)));
+  }
+  function currentStage(matingDate){
+    const elapsed=GESTATION-daysDiff(addDays(matingDate,GESTATION));
+    let stage=STAGES[0];
+    for(let s of STAGES){if(elapsed>=s.day) stage=s;}
+    return stage;
+  }
+  function sowScore(sowId){
+    const records=reproductions.filter(r=>r.sowId===sowId);
+    const farrowedR=records.filter(r=>r.status==="farrowed");
+    const totalP=farrowedR.reduce((s,r)=>s+(r.piglets||0),0);
+    return{litters:farrowedR.length,avg:farrowedR.length>0?(totalP/farrowedR.length).toFixed(1):0,rate:records.length>0?Math.round((farrowedR.length/records.length)*100):0,totalPiglets:totalP};
+  }
 
   return(<div>
-    <div style={S.h1}>🐖 Reproduction Management</div>
-    <div style={S.sub}>Track breeding, predict farrowings, AI-powered reproduction insights</div>
+    <div style={S.h1}>🐖 Pregnancy & Reproduction</div>
+    <div style={S.sub}>Full breeding cycle · Birth predictions · Sow performance</div>
 
     {/* Alerts */}
-    {upcomingFarrows.length>0&&<div style={{padding:"11px 14px",background:"rgba(245,158,11,.08)",border:"1px solid rgba(245,158,11,.3)",borderRadius:9,marginBottom:12,fontSize:13,color:C.amber}}>
-      🔔 <strong>{upcomingFarrows.length}</strong> farrowing(s) expected within 14 days — prepare farrowing pens!
-      {upcomingFarrows.map(r=>{const sow=pigs.find(p=>p.id===r.sowId);return<div key={r.id} style={{marginTop:4,paddingLeft:16}}>• {sow?sow.tag:"Sow"} — expected {r.expectedFarrow} ({daysDiff(r.expectedFarrow)} days)</div>;})}
+    {overdue.length>0&&<div style={{padding:"12px 16px",background:"rgba(239,68,68,.08)",border:"1.5px solid rgba(239,68,68,.4)",borderRadius:10,marginBottom:12,animation:"pulse 2s ease-in-out infinite"}}>
+      <div style={{fontWeight:700,color:C.red,fontSize:14,marginBottom:6}}>🚨 OVERDUE — Immediate Attention!</div>
+      {overdue.map(r=>{const sow=pigs.find(p=>p.id===r.sowId);return(
+        <div key={r.id} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderTop:"1px solid rgba(239,68,68,.2)"}}>
+          <span style={{color:C.text,fontWeight:600}}>🐷 {sow?sow.tag:"Unknown"}</span>
+          <span style={{color:C.red,fontWeight:700}}>{Math.abs(daysDiff(r.expectedFarrow))}d overdue — check now!</span>
+        </div>
+      );})}
     </div>}
-    {overdue.length>0&&<div style={{padding:"11px 14px",background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.3)",borderRadius:9,marginBottom:12,fontSize:13,color:C.red}}>
-      ⚠️ <strong>{overdue.length}</strong> overdue farrowing(s) — check these sows immediately!
-      {overdue.map(r=>{const sow=pigs.find(p=>p.id===r.sowId);return<div key={r.id} style={{marginTop:4,paddingLeft:16}}>• {sow?sow.tag:"Sow"} — was due {r.expectedFarrow} ({Math.abs(daysDiff(r.expectedFarrow))} days ago)</div>;})}
+    {upcomingFarrows.length>0&&<div style={{padding:"12px 16px",background:"rgba(245,158,11,.08)",border:"1.5px solid rgba(245,158,11,.4)",borderRadius:10,marginBottom:12}}>
+      <div style={{fontWeight:700,color:C.amber,fontSize:14,marginBottom:6}}>🔔 Farrowing Soon — Prepare Pens!</div>
+      {upcomingFarrows.map(r=>{const sow=pigs.find(p=>p.id===r.sowId);return(
+        <div key={r.id} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderTop:"1px solid rgba(245,158,11,.2)"}}>
+          <span style={{color:C.text,fontWeight:600}}>🐷 {sow?sow.tag:"—"} · Due: {r.expectedFarrow}</span>
+          <span style={{color:C.amber,fontWeight:700}}>{daysDiff(r.expectedFarrow)===0?"TODAY!":daysDiff(r.expectedFarrow)+"d"}</span>
+        </div>
+      );})}
     </div>}
 
     {/* Stats */}
     <div style={S.g4}>
-      {[{l:"Breeding Females",v:sows.length,c:C.pink},{l:"Active Boars",v:boars.length,c:C.accent},{l:"Pregnant",v:pregnant.length,c:C.amber},{l:"Piglets Born",v:fmtNum(totalPiglets),c:C.purple}].map(s=>(
-        <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
+      {[{l:"Pregnant",v:pregnant.length,c:C.amber},{l:"Total Litters",v:farrowed.length,c:C.accent},{l:"Avg Litter",v:avgLitter+" 🐷",c:C.purple},{l:"Farrowing Rate",v:farrowRate+"%",c:farrowRate>=70?C.accent:C.red}].map(s=>(
+        <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c,fontSize:18}}>{s.v}</div></div>
+      ))}
+    </div>
+    <div style={S.g4}>
+      {[{l:"Total Piglets Born",v:fmtNum(totalPiglets),c:C.accent},{l:"Piglet Value",v:fmtRWF(totalPiglets*10000),c:"#10b981"},{l:"Breeding Females",v:sows.length,c:C.pink},{l:"Active Boars",v:boars.length,c:"#6366f1"}].map(s=>(
+        <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c,fontSize:s.v.length>8?14:18}}>{s.v}</div></div>
       ))}
     </div>
 
     {/* Tabs */}
-    <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border}}>
-      {[["overview","🐷 Overview"],["log","➕ Log Mating"],["schedule","📅 Schedule"],["ai","🤖 AI Predict"]].map(([t,l])=>(
+    <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border,flexWrap:"wrap"}}>
+      {[["overview","🐷 Active"],["predict","📅 Predictions"],["log","➕ Log Mating"],["sows","⭐ Sow Records"],["guide","📖 Guide"],["ai","🤖 AI"]].map(([t,l])=>(
         <button key={t} style={S.tab(tab===t)} onClick={()=>setTab(t)}>{l}</button>
       ))}
     </div>
 
-    {tab==="overview"&&(
-      <div>
-        {reproductions.length===0&&<div style={{...S.card,color:C.faint,fontSize:13}}>No breeding records yet. Use "Log Mating" to start tracking.</div>}
-        {reproductions.slice().reverse().map((r,i)=>{
-          const sow=pigs.find(p=>p.id===r.sowId);
-          const boar=pigs.find(p=>p.id===r.boarId);
-          const daysLeft=daysDiff(r.expectedFarrow);
-          const statusColor=r.status==="pregnant"?C.amber:r.status==="farrowed"?C.accent:C.red;
-          return(<div key={i} style={{...S.card,marginBottom:10}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
-              <div>
-                <div style={{fontWeight:700,color:C.text,fontSize:14}}>🐷 {sow?sow.tag:"Unknown Sow"}</div>
-                <div style={{fontSize:11,color:C.faint,marginTop:2}}>{boar?`Boar: ${boar.tag}`:"No boar recorded"} · Mated: {r.matingDate}</div>
+    {/* ACTIVE PREGNANCIES */}
+    {tab==="overview"&&(<div>
+      {pregnant.length===0&&<div style={{...S.card,color:C.faint,fontSize:13,textAlign:"center",padding:40}}>
+        <div style={{fontSize:36,marginBottom:8}}>🐖</div>No pregnant sows. Log a mating to start tracking.
+      </div>}
+      {pregnant.map((r,i)=>{
+        const sow=pigs.find(p=>p.id===r.sowId);
+        const boar=pigs.find(p=>p.id===r.boarId);
+        const daysLeft=daysDiff(r.expectedFarrow);
+        const progress=pregProgress(r.matingDate);
+        const stage=currentStage(r.matingDate);
+        const elapsed=GESTATION-daysLeft;
+        return(<div key={i} style={{...S.card,marginBottom:14,border:"1px solid "+stage.color+"44"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+            <div>
+              <div style={{fontWeight:800,color:C.text,fontSize:15}}>🐷 {sow?sow.tag:"Unknown"} <span style={{fontSize:11,color:C.faint,fontWeight:400}}>{sow?"("+sow.breed+")":""}</span></div>
+              <div style={{fontSize:11,color:C.faint}}>{boar?"♂ "+boar.tag+" · ":""}Mated: {r.matingDate} · {r.method||"Natural"}</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:22,fontWeight:800,color:daysLeft<0?C.red:daysLeft<=7?C.amber:C.accent}}>{daysLeft<0?Math.abs(daysLeft)+"d":daysLeft===0?"TODAY":daysLeft+"d"}</div>
+              <div style={{fontSize:9,color:C.faint}}>{daysLeft<0?"OVERDUE":daysLeft===0?"BIRTH DAY":"UNTIL BIRTH"}</div>
+            </div>
+          </div>
+          {/* Progress bar */}
+          <div style={{marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.faint,marginBottom:3}}>
+              <span>Day {elapsed} of {GESTATION}</span>
+              <span style={{color:stage.color,fontWeight:700}}>{stage.icon} {stage.label} — {stage.desc}</span>
+              <span>{progress}%</span>
+            </div>
+            <div style={{height:10,background:C.elevated,borderRadius:10,overflow:"hidden"}}>
+              <div style={{height:"100%",width:progress+"%",background:"linear-gradient(90deg,#8b5cf6,"+stage.color+")",borderRadius:10,transition:"width .5s"}}/>
+            </div>
+          </div>
+          {/* Stage dots */}
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 2px",marginBottom:10}}>
+            {STAGES.map((s,si)=>{
+              const passed=elapsed>=s.day;
+              const current=s.label===stage.label;
+              return(<React.Fragment key={si}>
+                <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                  <div style={{width:current?26:18,height:current?26:18,borderRadius:"50%",background:passed?s.color:"rgba(100,116,139,.15)",border:current?"3px solid "+s.color:"none",display:"flex",alignItems:"center",justifyContent:"center",fontSize:current?13:9,boxShadow:current?"0 0 8px "+s.color+"66":"none",transition:"all .3s"}}>{passed?s.icon:""}</div>
+                  <div style={{fontSize:7,color:passed?s.color:C.faint,textAlign:"center",maxWidth:36,lineHeight:1.2}}>{s.label}</div>
+                </div>
+                {si<STAGES.length-1&&<div style={{flex:1,height:2,background:elapsed>s.day?"linear-gradient(90deg,"+s.color+","+STAGES[si+1].color+")":"rgba(100,116,139,.15)",margin:"0 1px",marginBottom:16}}/>}
+              </React.Fragment>);
+            })}
+          </div>
+          {/* Key dates */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:10}}>
+            {[["🔍 Heat Check",r.heatCheckDate||addDays(r.matingDate,21)],["🏠 Prep Pen",r.preparePenDate||addDays(r.matingDate,100)],["🐣 Birth Due",r.expectedFarrow]].map(([l,v])=>(
+              <div key={l} style={{background:C.elevated,borderRadius:7,padding:"6px 8px",textAlign:"center"}}>
+                <div style={{fontSize:9,color:C.faint}}>{l}</div>
+                <div style={{fontSize:11,color:C.text,fontWeight:600,marginTop:1}}>{v}</div>
               </div>
-              <span style={{padding:"3px 10px",borderRadius:20,background:statusColor+"22",color:statusColor,fontSize:11,fontWeight:700}}>{r.status.toUpperCase()}</span>
+            ))}
+          </div>
+          <div style={{display:"flex",gap:7}}>
+            <button style={{...S.btn(C.accent),flex:1,padding:9,fontSize:12}} onClick={()=>{const n=parseInt(prompt("How many piglets born?","10")||"10");updateStatus(r.id,"farrowed",n);}}>✅ Mark Farrowed</button>
+            <button style={{...S.btn(C.red),padding:"9px 14px",fontSize:12}} onClick={()=>{if(confirm("Mark as failed/aborted?"))updateStatus(r.id,"failed",0);}}>✗ Failed</button>
+          </div>
+          {r.notes&&<div style={{fontSize:11,color:C.faint,marginTop:8,fontStyle:"italic",padding:"5px 9px",background:C.elevated,borderRadius:6}}>📝 {r.notes}</div>}
+        </div>);
+      })}
+    </div>)}
+
+    {/* BIRTH PREDICTIONS */}
+    {tab==="predict"&&(<div>
+      {pregnant.length===0&&<div style={{...S.card,color:C.faint,fontSize:13}}>No pregnant sows to predict.</div>}
+      {pregnant.sort((a,b)=>a.expectedFarrow?.localeCompare(b.expectedFarrow)).map((r,i)=>{
+        const sow=pigs.find(p=>p.id===r.sowId);
+        const daysLeft=daysDiff(r.expectedFarrow);
+        const stage=currentStage(r.matingDate);
+        const progress=pregProgress(r.matingDate);
+        return(<div key={i} style={{...S.card,marginBottom:12,border:"1px solid "+(daysLeft<0?C.red:daysLeft<=7?C.amber:C.border)}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <div style={{fontWeight:700,color:C.text,fontSize:14}}>🐷 {sow?sow.tag:"—"} <span style={{fontSize:11,color:stage.color}}>{stage.icon} {stage.label}</span></div>
+            <div style={{padding:"4px 14px",borderRadius:20,background:daysLeft<0?C.red:daysLeft<=3?"#ef4444":daysLeft<=7?C.amber:C.accentSoft,color:daysLeft<=7?"#fff":C.accent,fontWeight:800,fontSize:13}}>
+              {daysLeft<0?Math.abs(daysLeft)+"d OVERDUE":daysLeft===0?"🐣 TODAY!":daysLeft+"d left"}
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:7,marginBottom:8}}>
-              <div style={{background:C.elevated,borderRadius:6,padding:"6px 10px"}}><div style={{fontSize:9,color:C.faint}}>MATING DATE</div><div style={{fontSize:12,color:C.text,marginTop:2}}>{r.matingDate}</div></div>
-              <div style={{background:C.elevated,borderRadius:6,padding:"6px 10px"}}><div style={{fontSize:9,color:C.faint}}>EXPECTED FARROWING</div><div style={{fontSize:12,color:r.status==="pregnant"&&daysLeft<=14?C.amber:C.text,marginTop:2}}>{r.expectedFarrow}</div></div>
-              <div style={{background:C.elevated,borderRadius:6,padding:"6px 10px"}}><div style={{fontSize:9,color:C.faint}}>{r.status==="farrowed"?"PIGLETS BORN":"DAYS LEFT"}</div><div style={{fontSize:12,color:C.accent,marginTop:2}}>{r.status==="farrowed"?r.piglets:daysLeft>0?daysLeft+" days":daysLeft===0?"TODAY!":Math.abs(daysLeft)+" OVERDUE"}</div></div>
-            </div>
-            {r.status==="pregnant"&&(<div style={{display:"flex",gap:7}}>
-              <button style={{...S.btn(C.accent),fontSize:11,padding:"5px 10px"}} onClick={()=>{const n=parseInt(prompt("How many piglets were born?","0")||"0");updateStatus(r.id,"farrowed",n);}}>✓ Mark Farrowed</button>
-              <button style={{...S.btn(C.red),fontSize:11,padding:"5px 10px"}} onClick={()=>updateStatus(r.id,"failed",0)}>✗ Mark Failed</button>
-            </div>)}
-            {r.notes&&<div style={{fontSize:11,color:C.faint,marginTop:6,fontStyle:"italic"}}>"{r.notes}"</div>}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:7,marginBottom:10}}>
+            {[["🗓️ Expected Birth",r.expectedFarrow],["📊 Progress",progress+"%"],["🔍 Heat Check",r.heatCheckDate||addDays(r.matingDate,21)],["🏠 Pen Prep By",r.preparePenDate||addDays(r.matingDate,100)],["🐷 Est. Piglets","8–12 piglets"],["💰 Est. Value",fmtRWF(100000)]].map(([l,v])=>(
+              <div key={l} style={{background:C.elevated,borderRadius:7,padding:"7px 9px"}}>
+                <div style={{fontSize:9,color:C.faint}}>{l}</div>
+                <div style={{fontSize:12,color:C.text,fontWeight:600,marginTop:1}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          {daysLeft<=14&&daysLeft>=0&&<div style={{padding:"9px 12px",background:"rgba(245,158,11,.06)",borderRadius:8,border:"1px solid rgba(245,158,11,.2)"}}>
+            <div style={{fontSize:12,fontWeight:700,color:C.amber,marginBottom:6}}>📋 Pre-Farrowing Checklist:</div>
+            {["Clean & disinfect farrowing pen","Prepare heat lamp & bedding (32°C for piglets)","Stock ORS sachets, clean towels, iodine","Reduce feed to 1.5kg/day from day 112","Prepare iron injection for newborn piglets","Watch for swollen udder — sign of imminent birth"].map((item,ii)=>(
+              <div key={ii} style={{fontSize:11,color:C.muted,padding:"2px 0",display:"flex",gap:6}}><span style={{color:C.amber}}>□</span>{item}</div>
+            ))}
+          </div>}
+        </div>);
+      })}
+      {farrowed.length>0&&<div style={S.card}>
+        <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:10}}>✅ Completed Farrowings ({farrowed.length})</div>
+        {farrowed.slice().reverse().map((r,i)=>{
+          const sow=pigs.find(p=>p.id===r.sowId);
+          return(<div key={i} style={S.row}>
+            <div><div style={{fontWeight:600}}>{sow?sow.tag:"—"}</div><div style={{fontSize:11,color:C.faint}}>Mated: {r.matingDate} · Born: {r.farrowDate||r.expectedFarrow}</div></div>
+            <div style={{textAlign:"right"}}><div style={{fontWeight:700,color:C.accent}}>{r.piglets||0} 🐷</div><div style={{fontSize:11,color:"#10b981"}}>{fmtRWF((r.piglets||0)*10000)}</div></div>
           </div>);
         })}
-      </div>
-    )}
-
-    {tab==="log"&&(
-      <div style={{maxWidth:500}}>
-        {saved&&<div style={{padding:10,background:C.accentSoft,borderRadius:8,marginBottom:12,color:C.accent,fontSize:13}}>✓ Mating recorded! Expected farrowing: {addDays(form.matingDate,GESTATION)}</div>}
-        <div style={S.card}>
-          <div style={{fontSize:14,fontWeight:700,color:C.pink,marginBottom:14}}>🐖 Log Mating Event</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-            <div><label style={S.lbl}>Sow / Gilt *</label>
-              <select value={form.sowId} onChange={e=>setForm({...form,sowId:e.target.value})} style={S.inp}>
-                <option value="">Select sow/gilt</option>
-                {sows.map(p=><option key={p.id} value={p.id}>{p.tag} ({p.breed})</option>)}
-              </select>
-              {sows.length===0&&<div style={{fontSize:10,color:C.amber,marginTop:3}}>No sows/gilts found. Add female pigs in Pig Records.</div>}
-            </div>
-            <div><label style={S.lbl}>Boar</label>
-              <select value={form.boarId} onChange={e=>setForm({...form,boarId:e.target.value})} style={S.inp}>
-                <option value="">Select boar (optional)</option>
-                {boars.map(p=><option key={p.id} value={p.id}>{p.tag} ({p.breed})</option>)}
-              </select>
-            </div>
-            <div><label style={S.lbl}>Mating Date *</label><input type="date" value={form.matingDate} onChange={e=>setForm({...form,matingDate:e.target.value})} style={S.inp}/></div>
-            <div><label style={S.lbl}>Expected Farrowing</label>
-              <div style={{...S.inp,background:C.elevated+"!important",color:C.accent,fontWeight:700,padding:"9px 12px",borderRadius:8,fontSize:13}}>
-                {form.matingDate?addDays(form.matingDate,GESTATION):"—"}
-              </div>
-            </div>
-          </div>
-          <div style={{marginBottom:12}}><label style={S.lbl}>Notes</label><textarea rows={2} value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="e.g. natural service, AI, etc." style={{...S.inp,resize:"vertical"}}/></div>
-          <div style={{padding:"10px 13px",background:"rgba(167,139,250,.06)",borderRadius:8,fontSize:12,color:C.muted,marginBottom:12}}>
-            ℹ️ Pig gestation = 114 days (3 months, 3 weeks, 3 days) · Expected litter: 8–12 piglets
-          </div>
-          <button style={{...S.btn(C.pink),width:"100%",padding:12,fontSize:14}} onClick={logMating}>🐖 Record Mating →</button>
+        <div style={{marginTop:8,padding:"9px 12px",background:C.accentSoft,borderRadius:7,display:"flex",justifyContent:"space-between"}}>
+          <span style={{color:C.muted,fontSize:12}}>Total: {totalPiglets} piglets · Avg: {avgLitter}/litter</span>
+          <span style={{color:C.accent,fontWeight:700}}>{fmtRWF(totalPiglets*10000)}</span>
         </div>
-      </div>
-    )}
+      </div>}
+    </div>)}
 
-    {tab==="schedule"&&(
-      <div>
-        <div style={S.g2}>
-          <div style={S.card}>
-            <div style={{fontSize:13,fontWeight:700,color:C.amber,marginBottom:12}}>📅 Upcoming Farrowings</div>
-            {pregnant.length===0&&<div style={{color:C.faint,fontSize:13}}>No pregnant sows recorded.</div>}
-            {pregnant.sort((a,b)=>a.expectedFarrow?.localeCompare(b.expectedFarrow)).map((r,i)=>{
-              const sow=pigs.find(p=>p.id===r.sowId);
-              const d=daysDiff(r.expectedFarrow);
-              return(<div key={i} style={{...S.row,background:d<=7?"rgba(245,158,11,.07)":d<0?"rgba(239,68,68,.07)":C.elevated}}>
-                <div>
-                  <div style={{fontWeight:600,color:C.text}}>{sow?sow.tag:"Unknown"}</div>
-                  <div style={{fontSize:11,color:C.faint}}>{r.expectedFarrow}</div>
-                </div>
-                <span style={{fontSize:12,fontWeight:700,color:d<0?C.red:d<=14?C.amber:C.accent}}>
-                  {d<0?Math.abs(d)+"d OVERDUE":d===0?"TODAY":d+"d left"}
-                </span>
-              </div>);
-            })}
+    {/* LOG MATING */}
+    {tab==="log"&&(<div style={{maxWidth:500}}>
+      {saved&&<div style={{padding:"11px 14px",background:C.accentSoft,borderRadius:8,marginBottom:14,color:C.accent,fontSize:13,fontWeight:600}}>
+        ✅ Mating recorded! Expected birth: <strong>{form.matingDate?addDays(form.matingDate,GESTATION):"—"}</strong>
+      </div>}
+      <div style={S.card}>
+        <div style={{fontSize:15,fontWeight:700,color:C.pink,marginBottom:14}}>🐖 Log Mating Event</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+          <div><label style={S.lbl}>Sow / Gilt *</label>
+            <select value={form.sowId} onChange={e=>setForm({...form,sowId:e.target.value})} style={S.inp}>
+              <option value="">Select sow/gilt</option>
+              {sows.map(p=>{const sc=sowScore(p.id);return<option key={p.id} value={p.id}>{p.tag} ({p.breed}) — {sc.litters} litters</option>;})}
+            </select>
+            {sows.length===0&&<div style={{fontSize:10,color:C.amber,marginTop:3}}>No sows found. Add female pigs first.</div>}
           </div>
-          <div style={S.card}>
-            <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:12}}>✅ Farrowed Records</div>
-            {farrowed.length===0&&<div style={{color:C.faint,fontSize:13}}>No farrowing records yet.</div>}
-            {farrowed.slice().reverse().map((r,i)=>{
-              const sow=pigs.find(p=>p.id===r.sowId);
-              return(<div key={i} style={S.row}>
-                <div>
-                  <div style={{fontWeight:600,color:C.text}}>{sow?sow.tag:"Unknown"}</div>
-                  <div style={{fontSize:11,color:C.faint}}>Mated: {r.matingDate} · Born: {r.farrowDate||"—"}</div>
-                </div>
-                <span style={{fontSize:13,fontWeight:700,color:C.accent}}>{r.piglets||0} 🐷</span>
-              </div>);
-            })}
-            {farrowed.length>0&&<div style={{marginTop:8,padding:"8px 11px",background:C.accentSoft,borderRadius:7,fontSize:12,color:C.accent}}>Total piglets born: <strong>{totalPiglets}</strong> · Est. value: <strong>{fmtRWF(totalPiglets*10000)}</strong></div>}
+          <div><label style={S.lbl}>Boar (optional)</label>
+            <select value={form.boarId} onChange={e=>setForm({...form,boarId:e.target.value})} style={S.inp}>
+              <option value="">Select boar</option>
+              {boars.map(p=><option key={p.id} value={p.id}>{p.tag} ({p.breed})</option>)}
+            </select>
           </div>
+          <div><label style={S.lbl}>Method</label>
+            <select value={form.method} onChange={e=>setForm({...form,method:e.target.value})} style={S.inp}>
+              {["Natural Service","Artificial Insemination","Hand Mating"].map(m=><option key={m}>{m}</option>)}
+            </select>
+          </div>
+          <div><label style={S.lbl}>Mating Date *</label><input type="date" value={form.matingDate} onChange={e=>setForm({...form,matingDate:e.target.value})} style={S.inp}/></div>
         </div>
-        {/* Heat cycle guide */}
-        <div style={S.card}>
-          <div style={{fontSize:13,fontWeight:700,color:C.muted,marginBottom:10}}>📆 Breeding Calendar Reference</div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,fontSize:12}}>
-            {[["Gestation Period","114 days","3m 3w 3d"],["Heat Cycle","21 days","After weaning"],["Weaning Age","28 days","4 weeks"],["Re-breed After","5-7 days","Post weaning"],["Litter Size (RW)","8–12 piglets","Per farrowing"],["Piglet Value","RWF 8k-12k","Per head"]].map(([l,v,s])=>(
-              <div key={l} style={{background:C.elevated,borderRadius:7,padding:"9px 11px"}}>
-                <div style={{fontSize:9,color:C.faint,textTransform:"uppercase",letterSpacing:.5}}>{l}</div>
-                <div style={{color:C.accent,fontWeight:700,marginTop:3}}>{v}</div>
-                <div style={{fontSize:10,color:C.muted,marginTop:1}}>{s}</div>
+        {form.matingDate&&<div style={{background:"rgba(22,163,74,.05)",border:"1px solid rgba(22,163,74,.2)",borderRadius:9,padding:"12px 14px",marginBottom:12}}>
+          <div style={{fontSize:12,fontWeight:700,color:C.accent,marginBottom:8}}>📅 Auto-Calculated Key Dates:</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7,fontSize:12}}>
+            {[["🔍 Heat Check (Day 21)",addDays(form.matingDate,21),"No heat = pregnant!"],["✅ Confirm Preg (Day 35)",addDays(form.matingDate,35),"Physical signs visible"],["🍽️ Increase Feed (Day 75)",addDays(form.matingDate,75),"2.5kg/day"],["🏠 Prepare Pen (Day 100)",addDays(form.matingDate,100),"Clean & disinfect"],["⚠️ Near Birth (Day 110)",addDays(form.matingDate,110),"Watch closely"],["🐣 Expected Birth (Day 114)",addDays(form.matingDate,114),"Farrowing day!"]].map(([l,v,h])=>(
+              <div key={l} style={{background:"#fff",borderRadius:7,padding:"7px 10px"}}>
+                <div style={{fontWeight:600,color:C.accent,fontSize:10}}>{l}</div>
+                <div style={{fontSize:13,color:C.text,fontWeight:700}}>{v}</div>
+                <div style={{fontSize:9,color:C.faint}}>{h}</div>
               </div>
             ))}
           </div>
-        </div>
+        </div>}
+        <div style={{marginBottom:12}}><label style={S.lbl}>Notes</label><textarea rows={2} value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="e.g. first mating, AI done twice..." style={{...S.inp,resize:"vertical"}}/></div>
+        <button style={{...S.btn(C.pink),width:"100%",padding:13,fontSize:14,fontWeight:700}} onClick={logMating}>🐖 Record Mating & Generate Timeline →</button>
       </div>
-    )}
+    </div>)}
 
-    {tab==="ai"&&(
-      <div>
-        <div style={S.g2}>
-          <AIPrediction pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} topic="AI predict pig reproduction: next farrowing dates, expected litter sizes Rwanda, best sow-boar pairing, 30-day piglet forecast, reproduction profitability in RWF." label="30-Day Reproduction Forecast" icon="🐖"/>
-          <AIPrediction pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} topic="Promote optimal breeding: identify which sows to breed now based on heat cycle, optimal boar selection Rwanda breeds, nutrition for pregnant sows, farrowing pen preparation tips." label="Breeding Optimization" icon="💡"/>
-        </div>
-      </div>
-    )}
-  </div>);
-}
-
-/* ─── RWANDA MARKET ─── */
-function RwandaMarket({pigs,feeds,sales,logs,expenses,incomes,reproductions,stock}){
-  const [lastRefresh,setLastRefresh]=useState(()=>getLS("fiq_mkt_ts",null));
-  const [prices,setPrices]=useState(()=>{
-    const stored=getLS("fiq_mkt_p",null);
-    return stored||Object.fromEntries(Object.entries(RW_BASE_PRICES).map(([k,v])=>[k,{...v,current:Math.round(v.base*getDailyVariance())}]));
-  });
-  const [loading,setLoading]=useState(false);
-  const active=pigs.filter(p=>p.status==="active");
-
-  function refresh(){
-    setLoading(true);
-    setTimeout(()=>{
-      const newPrices=Object.fromEntries(Object.entries(RW_BASE_PRICES).map(([k,v])=>[k,{...v,current:Math.round(v.base*getDailyVariance())}]));
-      setPrices(newPrices);
-      const now=new Date().toLocaleTimeString("en-RW",{hour:"2-digit",minute:"2-digit"});
-      setLastRefresh(now);
-      setLS("fiq_mkt_p",newPrices);
-      setLS("fiq_mkt_ts",now);
-      setLoading(false);
-    },1200);
-  }
-
-  useEffect(()=>{
-    const stored=getLS("fiq_mkt_ts",null);
-    if(!stored)refresh();
-  },[]);
-
-  // Calculate each pig's market value
-  const pigValuations=active.map(pig=>{
-    const val=getMarketPrice(pig.stage,pig.weight);
-    return{...pig,marketValue:val};
-  });
-  const totalHerdValue=pigValuations.reduce((s,p)=>s+p.marketValue,0);
-  const soldValue=sales.reduce((s,l)=>s+(l.total||0),0);
-  const totalInc=soldValue+incomes.reduce((s,l)=>s+(l.amount||0),0);
-  const totalExp=feeds.reduce((s,l)=>s+(l.cost||0),0)+expenses.reduce((s,l)=>s+(l.amount||0),0);
-
-  const stageColors={Piglet:"#a78bfa",Weaner:"#60a5fa",Grower:"#10b981",Finisher:C.amber,Gilt:C.pink,Sow:C.red,Boar:"#fb923c"};
-
-  return(<div>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-      <div>
-        <div style={S.h1}>📈 Rwanda Pig Market</div>
-        <div style={S.sub}>Live market prices · Herd valuation · Market analysis</div>
-      </div>
-      <div style={{display:"flex",alignItems:"center",gap:10}}>
-        {lastRefresh&&<div style={{fontSize:11,color:C.faint}}>Updated: {lastRefresh} <span className="live-pulse" style={{color:C.accent}}>●</span></div>}
-        <button style={{...S.btn(C.blue),padding:"7px 13px",fontSize:12}} onClick={refresh} disabled={loading}>
-          {loading?<><span className="spin" style={{...S.loader,borderTopColor:"#fff"}}/>…</>:"🔄 Refresh Prices"}
-        </button>
-      </div>
-    </div>
-
-    {/* Market prices table */}
-    <div style={S.card}>
-      <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:12}}>📊 Current Rwanda Market Prices</div>
-      <div style={{overflowX:"auto"}}>
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-          <thead><tr>{["Stage/Category","Description","Market Price","Trend","Top Markets"].map(h=><th key={h} style={{textAlign:"left",color:C.faint,paddingBottom:8,borderBottom:"1px solid "+C.border,fontSize:10,paddingRight:12}}>{h}</th>)}</tr></thead>
-          <tbody>
-            {Object.entries(prices).map(([k,v])=>(
-              <tr key={k} style={{borderBottom:"1px solid "+C.elevated}}>
-                <td style={{padding:"9px 12px 9px 0",color:C.text,fontWeight:600}}>{k.charAt(0).toUpperCase()+k.slice(1)}</td>
-                <td style={{padding:"9px 12px 9px 0",color:C.muted,fontSize:11}}>{v.desc}</td>
-                <td style={{padding:"9px 12px 9px 0",color:C.accent,fontWeight:700}}>
-                  {v.unit==="kg"?`RWF ${fmtNum(v.current)}/kg`:`RWF ${fmtNum(v.current)}/head`}
-                </td>
-                <td style={{padding:"9px 12px 9px 0"}}>
-                  <span style={{fontSize:11,color:v.trend==="up"?C.accent:v.trend==="down"?C.red:C.amber}}>
-                    {v.trend==="up"?"↑ Rising":v.trend==="down"?"↓ Falling":"→ Stable"}
-                  </span>
-                </td>
-                <td style={{padding:"9px 0",fontSize:10,color:C.muted}}>{MARKETS[Math.abs(k.charCodeAt(0)%MARKETS.length)]}</td>
-              </tr>
+    {/* SOW RECORDS */}
+    {tab==="sows"&&(<div>
+      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>⭐ Sow Performance</div>
+      {sows.length===0&&<div style={{...S.card,color:C.faint,fontSize:13}}>No sows registered yet.</div>}
+      {sows.map((sow,i)=>{
+        const sc=sowScore(sow.id);
+        const currentPreg=reproductions.find(r=>r.sowId===sow.id&&r.status==="pregnant");
+        const lastFarrow=reproductions.filter(r=>r.sowId===sow.id&&r.status==="farrowed").slice(-1)[0];
+        const nextHeat=lastFarrow?addDays(lastFarrow.farrowDate||lastFarrow.expectedFarrow,33):null;
+        const rating=sc.litters===0?"New":sc.avg>=10?"⭐ Excellent":sc.avg>=8?"✅ Good":sc.avg>=6?"⚠️ Average":"❌ Poor";
+        const ratingColor=sc.litters===0?C.faint:parseFloat(sc.avg)>=10?C.amber:parseFloat(sc.avg)>=8?C.accent:parseFloat(sc.avg)>=6?C.amber:C.red;
+        return(<div key={i} style={{...S.card,marginBottom:12,border:"1px solid "+(currentPreg?"rgba(245,158,11,.3)":C.border)}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+            <div><div style={{fontWeight:700,fontSize:15,color:C.text}}>🐷 {sow.tag} <span style={{fontSize:11,color:C.faint,fontWeight:400}}>({sow.breed})</span></div>
+            <div style={{fontSize:11,color:C.faint}}>DOB: {sow.dob||"—"} · {sow.weight}kg</div></div>
+            <span style={{padding:"3px 11px",borderRadius:20,background:ratingColor+"22",color:ratingColor,fontSize:12,fontWeight:700}}>{rating}</span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:7,marginBottom:8}}>
+            {[["Litters",sc.litters,C.accent],["Avg Size",sc.avg+" 🐷",C.purple],["Piglets",sc.totalPiglets,C.amber],["Rate",sc.rate+"%",sc.rate>=70?C.accent:C.red]].map(([l,v,c])=>(
+              <div key={l} style={{background:C.elevated,borderRadius:7,padding:"7px",textAlign:"center"}}>
+                <div style={{fontSize:9,color:C.faint,marginBottom:2}}>{l}</div>
+                <div style={{fontWeight:700,color:c,fontSize:14}}>{v}</div>
+              </div>
             ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
+          </div>
+          {currentPreg&&<div style={{padding:"6px 10px",background:"rgba(245,158,11,.07)",borderRadius:7,fontSize:12,color:C.amber}}>
+            🤰 Pregnant · Birth: <strong>{currentPreg.expectedFarrow}</strong> ({daysDiff(currentPreg.expectedFarrow)}d)
+          </div>}
+          {nextHeat&&!currentPreg&&<div style={{padding:"6px 10px",background:C.accentSoft,borderRadius:7,fontSize:12,color:C.accent}}>
+            🔥 Next heat ~<strong>{nextHeat}</strong>
+          </div>}
+        </div>);
+      })}
+    </div>)}
 
-    {/* Herd valuation */}
-    <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:10}}>🐷 Your Herd Valuation</div>
-    <div style={S.g4}>
-      {[{l:"Active Pigs",v:active.length,c:C.accent},{l:"Total Herd Value",v:fmtRWF(totalHerdValue),c:C.accent},{l:"Market-Ready (80kg+)",v:active.filter(p=>p.weight>=80).length,c:C.amber},{l:"Avg Value/Pig",v:active.length>0?fmtRWF(totalHerdValue/active.length):"—",c:C.purple}].map(s=>(
-        <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c,fontSize:s.v.length>8?15:22}}>{s.v}</div></div>
+    {/* GUIDE */}
+    {tab==="guide"&&(<div style={S.card}>
+      <div style={{fontSize:14,fontWeight:700,color:C.accent,marginBottom:14}}>📖 Rwanda Pig Breeding Guide</div>
+      {[
+        {t:"🗓️ Gestation",items:["114 days total (3 months, 3 weeks, 3 days)","Normal range: 112–116 days","Over 116 days: call vet immediately"]},
+        {t:"🔥 Heat Signs",items:["Swollen red vulva","Stands still when pressed on back","Restless, loss of appetite","Every 21 days if not pregnant","Breed on day 2 of heat for best results"]},
+        {t:"✅ Pregnancy Signs",items:["No return to heat at day 21 = likely pregnant","Swollen abdomen visible from day 35","Udder enlarges from day 90","Nesting behavior 24–48h before birth"]},
+        {t:"🏠 Prepare Farrowing Pen",items:["Move sow at day 100–107","Clean, disinfect, dry bedding","Heat lamp (32°C for piglets)","Prepare: towels, iodine, iron injection"]},
+        {t:"🐣 Birth Signs",items:["Nesting & restlessness 12–24h before","Milk drops from teats","Vulva swollen and relaxed","Contractions 30 min before first piglet"]},
+        {t:"🐷 Newborn Care",items:["Clear mucus from nose and mouth","Dry with clean towel","Disinfect umbilical cord with iodine","Iron injection within 3 days","Ensure nursing within 1 hour"]},
+        {t:"💉 After Farrowing",items:["Placenta expelled within 4 hours","Feed 2–3kg/day, increase after day 3","Wean piglets at 28 days","Sow in heat 5–7 days after weaning"]},
+      ].map(({t,items},i)=>(
+        <div key={i} style={{marginBottom:14,paddingBottom:14,borderBottom:i<6?"1px solid "+C.elevated:"none"}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:7}}>{t}</div>
+          {items.map((item,ii)=>(
+            <div key={ii} style={{display:"flex",gap:8,padding:"2px 0",fontSize:12,color:C.muted}}>
+              <span style={{color:C.accent,flexShrink:0}}>•</span>{item}
+            </div>
+          ))}
+        </div>
       ))}
-    </div>
+    </div>)}
 
-    {pigValuations.length>0&&<div style={S.card}>
-      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>Individual Pig Market Valuations</div>
-      <div style={{overflowX:"auto"}}>
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-          <thead><tr>{["Tag","Breed","Stage","Weight","Market Value","Readiness"].map(h=><th key={h} style={{textAlign:"left",color:C.faint,paddingBottom:8,borderBottom:"1px solid "+C.border,fontSize:10,paddingRight:12}}>{h}</th>)}</tr></thead>
-          <tbody>
-            {pigValuations.sort((a,b)=>b.marketValue-a.marketValue).map((pig,i)=>(
-              <tr key={i} style={{borderBottom:"1px solid "+C.elevated}}>
-                <td style={{padding:"8px 12px 8px 0",color:C.text,fontWeight:600}}>{pig.tag}</td>
-                <td style={{padding:"8px 12px 8px 0",color:C.muted}}>{pig.breed}</td>
-                <td style={{padding:"8px 12px 8px 0"}}><span style={{padding:"2px 8px",borderRadius:12,background:(stageColors[pig.stage]||C.accent)+"22",color:stageColors[pig.stage]||C.accent,fontSize:10,fontWeight:600}}>{pig.stage}</span></td>
-                <td style={{padding:"8px 12px 8px 0",color:C.muted}}>{pig.weight}kg</td>
-                <td style={{padding:"8px 12px 8px 0",color:C.accent,fontWeight:700}}>{fmtRWF(pig.marketValue)}</td>
-                <td style={{padding:"8px 0"}}>
-                  <span style={{fontSize:10,color:pig.weight>=80?C.accent:pig.weight>=65?C.amber:C.red}}>
-                    {pig.weight>=80?"✅ Ready to sell":pig.weight>=65?"⏳ Almost ready":"🌱 Growing"}
-                  </span>
-                </td>
-              </tr>
-            ))}
-            <tr style={{background:C.elevated}}>
-              <td colSpan={4} style={{padding:"9px 12px 9px 0",fontWeight:700,color:C.text}}>TOTAL HERD VALUE</td>
-              <td style={{padding:"9px 12px 9px 0",color:C.accent,fontWeight:800,fontSize:14}}>{fmtRWF(totalHerdValue)}</td>
-              <td/>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>}
-
-    {/* AI Market Analysis */}
-    <div style={{fontSize:14,fontWeight:700,color:C.accent,margin:"6px 0 12px"}}>✦ AI Market Analysis</div>
-    <AIPrediction pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} topic={`Analyze Rwanda pig market conditions. Current herd value=${fmtRWF(totalHerdValue)}, ${active.filter(p=>p.weight>=80).length} ready to sell. Give best selling strategy, price negotiation tips, which markets to target, seasonal trends, and 30-day price forecast. All in RWF.`} label="Rwanda Market Intelligence" icon="📈"/>
+    {/* AI */}
+    {tab==="ai"&&(
+      <AIPrediction pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}
+        topic={`Rwanda pig reproduction advisor. Pregnant: ${pregnant.length}, upcoming farrows 14d: ${upcomingFarrows.length}, overdue: ${overdue.length}, litters: ${farrowed.length}, avg litter: ${avgLitter}, total piglets: ${totalPiglets}. Give: 1) breeding optimization, 2) health risks for pregnant sows, 3) best selling age for piglets, 4) Rwanda seasonal breeding tips, 5) genetic improvement for local breeds.`}
+        label="AI Reproduction Advisor" icon="🐖" autoRun={false}/>
+    )}
   </div>);
 }
+
 
 /* ─── STOCK MANAGEMENT ─── */
 function StockManager({stock,setStock,feeds,pigs}){
@@ -1641,6 +1665,8 @@ function App(){
   const [sessionsLoaded,setSessionsLoaded]=useState(false);
   const [stock,setStock]=useState(INIT_STOCK);
   const [stockLoaded,setStockLoaded]=useState(false);
+  const [tasks,setTasks]=useState([]);
+  const [vaccinations,setVaccinations]=useState([]);
   const [user,setUser]=useState(null);
   const [sessionLoaded,setSessionLoaded]=useState(false);
   const [page,setPage]=useState("home");
@@ -1670,6 +1696,8 @@ function App(){
         if(data.logs&&data.logs.length>0) setLogs([...data.logs]);
         if(data.feeds&&data.feeds.length>0) setFeeds([...data.feeds]);
         if(data.sales&&data.sales.length>0) setSales([...data.sales]);
+        if(data.tasks&&data.tasks.length>0) setTasks([...data.tasks]);
+        if(data.vaccinations&&data.vaccinations.length>0) setVaccinations([...data.vaccinations]);
       }
     }).catch(e=>console.error("initial farm load error",e));
 
@@ -1689,6 +1717,9 @@ function App(){
           if(data.logs&&data.logs.length>0) setLogs([...data.logs]);
           if(data.feeds&&data.feeds.length>0) setFeeds([...data.feeds]);
           if(data.sales&&data.sales.length>0) setSales([...data.sales]);
+          if(data.reproductions&&data.reproductions.length>0) setReproductions([...data.reproductions]);
+          if(data.tasks&&data.tasks.length>0) setTasks([...data.tasks]);
+          if(data.vaccinations&&data.vaccinations.length>0) setVaccinations([...data.vaccinations]);
         }
       }catch(e){}
     },10000);
@@ -1775,7 +1806,14 @@ function App(){
     {id:"daylogs",l:"📋 Daily Logs"},
     {id:"messages",l:"📢 Messages"+(messages.length?" ("+messages.length+")":"")},
     {id:"workers",l:"👷 Workers"+(pending.length?" ("+pending.length+")":"")},
-    {id:"remote",l:"🖥️ Remote Work"+(sessions.filter(s=>s.status==="pending").length?" ⚠️"+sessions.filter(s=>s.status==="pending").length:"")}
+    {id:"remote",l:"🖥️ Remote Work"+(sessions.filter(s=>s.status==="pending").length?" ⚠️"+sessions.filter(s=>s.status==="pending").length:"")},
+    {id:"performance",l:"👷 Performance"},
+    {id:"weekly",l:"📊 Weekly Report"},
+    {id:"tasks",l:"✅ Tasks"+(tasks.filter(t=>t.status==="pending").length?" ("+tasks.filter(t=>t.status==="pending").length+")":"")},
+    {id:"vaccination",l:"💉 Vaccinations"+(vaccinations.filter(v=>daysDiff(v.nextDue)<=7&&daysDiff(v.nextDue)>=0).length?" 🔔":"")},
+    {id:"tasks",l:"✅ My Tasks"+(tasks.filter(t=>t.workerId===user.id&&t.status==="pending").length?" ("+tasks.filter(t=>t.workerId===user.id&&t.status==="pending").length+")":"")},
+    {id:"vaccination",l:"💉 Vaccinations"},
+    {id:"changepassword",l:"🔒 Change Password"}
   ];
   const workerNav=[
     {id:"home",l:"🏠 Dashboard"},
@@ -1783,7 +1821,14 @@ function App(){
     {id:"dailyentry",l:"📝 Daily Report"},
     {id:"feedentry",l:"🌾 Log Feeding"},
     {id:"saleentry",l:"🏷️ Log Sale"},
-    {id:"remotework",l:"🖥️ Remote Work"+(sessions.filter(s=>s.workerId===user.id&&s.status==="active").length?" ●":"")}
+    {id:"remotework",l:"🖥️ Remote Work"+(sessions.filter(s=>s.workerId===user.id&&s.status==="active").length?" ●":"")},
+    {id:"performance",l:"👷 Performance"},
+    {id:"weekly",l:"📊 Weekly Report"},
+    {id:"tasks",l:"✅ Tasks"+(tasks.filter(t=>t.status==="pending").length?" ("+tasks.filter(t=>t.status==="pending").length+")":"")},
+    {id:"vaccination",l:"💉 Vaccinations"+(vaccinations.filter(v=>daysDiff(v.nextDue)<=7&&daysDiff(v.nextDue)>=0).length?" 🔔":"")},
+    {id:"tasks",l:"✅ My Tasks"+(tasks.filter(t=>t.workerId===user.id&&t.status==="pending").length?" ("+tasks.filter(t=>t.workerId===user.id&&t.status==="pending").length+")":"")},
+    {id:"vaccination",l:"💉 Vaccinations"},
+    {id:"changepassword",l:"🔒 Change Password"}
   ];
   const nav=isAdmin?adminNav:workerNav;
 
@@ -1862,6 +1907,396 @@ function App(){
       {!isAdmin&&page==="feedentry"&&<FEntry user={user} pigs={pigs} feeds={feeds} setFeeds={setFeeds}/>}
       {!isAdmin&&page==="saleentry"&&<SEntry user={user} pigs={pigs} setPigs={setPigs} sales={sales} setSales={setSales}/>}
       {!isAdmin&&page==="remotework"&&<RemoteWorkPanel user={user} sessions={sessions} setSessions={setSessions} messages={messages}/>}
+      {isAdmin&&page==="performance"&&<WorkerPerformance users={users} logs={logs} feeds={feeds} sales={sales}/>}
+      {isAdmin&&page==="weekly"&&<WeeklyReport pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} users={users} stock={stock}/>}
+      {page==="tasks"&&<TaskManager user={user} users={users} tasks={tasks} setTasks={setTasks}/>}
+      {page==="vaccination"&&<VaccinationTracker pigs={pigs} users={users} vaccinations={vaccinations} setVaccinations={setVaccinations} user={user}/>}
+      {page==="changepassword"&&<ChangePassword user={user} users={users} setUsers={setUsers}/>}
+    </div>
+  </div>);
+}
+
+
+/* ═══════════════════════════════════════════════════
+   1. WORKER PERFORMANCE & ATTENDANCE
+═══════════════════════════════════════════════════ */
+function WorkerPerformance({users,logs,feeds,sales}){
+  const workers=users.filter(u=>u.role==="worker"&&u.approved);
+  // Get last 30 days
+  const today=new Date();
+  const days30=Array.from({length:30},(_,i)=>{
+    const d=new Date(today);d.setDate(d.getDate()-i);
+    return d.toISOString().slice(0,10);
+  });
+  const workdays=days30.length;
+
+  function score(w){
+    const wLogs=logs.filter(l=>l.workerId===w.id);
+    const wFeeds=feeds.filter(f=>f.workerId===w.id);
+    const wSales=sales.filter(s=>s.workerId===w.id);
+    const daysReported=new Set(wLogs.map(l=>l.date)).size;
+    const attendance=Math.round((daysReported/workdays)*100);
+    const pts=Math.min(100,Math.round((daysReported*3)+(wFeeds.length*2)+(wSales.length*5)));
+    const revenue=wSales.reduce((s,x)=>s+(x.total||0),0);
+    const sick=wLogs.reduce((s,l)=>s+(l.sick||0),0);
+    return{logs:wLogs.length,feeds:wFeeds.length,sales:wSales.length,attendance,pts,revenue,sick,daysReported};
+  }
+
+  const ranked=workers.map(w=>({...w,...score(w)})).sort((a,b)=>b.pts-a.pts);
+  const medal=["🥇","🥈","🥉"];
+
+  return(<div>
+    <div style={S.h1}>👷 Worker Performance</div>
+    <div style={S.sub}>Last 30 days · Ranked by performance score</div>
+    {workers.length===0&&<div style={{...S.card,color:C.faint,fontSize:13,textAlign:"center"}}>No workers yet.</div>}
+    {ranked.map((w,i)=>{
+      const color=i===0?C.amber:i===1?"#94a3b8":i===2?"#b45309":C.accent;
+      const pct=Math.min(100,w.pts);
+      return(<div key={w.id} style={{...S.card,marginBottom:12,border:i===0?"1.5px solid rgba(245,158,11,.4)":"1px solid "+C.border}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:22}}>{medal[i]||"👤"}</span>
+            <div>
+              <div style={{fontWeight:700,color:C.text,fontSize:14}}>{w.name}</div>
+              <div style={{fontSize:11,color:C.faint}}>@{w.username}</div>
+            </div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:20,fontWeight:800,color:color}}>{w.pts}</div>
+            <div style={{fontSize:10,color:C.faint}}>SCORE</div>
+          </div>
+        </div>
+        {/* Progress bar */}
+        <div style={{height:6,background:C.elevated,borderRadius:6,marginBottom:10,overflow:"hidden"}}>
+          <div style={{height:"100%",width:pct+"%",background:color,borderRadius:6,transition:"width .4s"}}/>
+        </div>
+        {/* Stats grid */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}}>
+          {[
+            ["📅 Attendance",w.attendance+"%",w.attendance>=80?C.accent:w.attendance>=50?C.amber:C.red],
+            ["📝 Reports",w.logs,C.accent],
+            ["🌾 Feedings",w.feeds,C.amber],
+            ["🏷️ Sales",w.sales,"#10b981"],
+          ].map(([l,v,c])=>(
+            <div key={l} style={{background:C.elevated,borderRadius:7,padding:"7px 8px",textAlign:"center"}}>
+              <div style={{fontSize:10,color:C.faint,marginBottom:3}}>{l}</div>
+              <div style={{fontWeight:700,color:c,fontSize:14}}>{v}</div>
+            </div>
+          ))}
+        </div>
+        {w.revenue>0&&<div style={{marginTop:8,fontSize:12,color:"#10b981",textAlign:"right",fontWeight:600}}>💰 Revenue: {fmtRWF(w.revenue)}</div>}
+        {w.sick>0&&<div style={{marginTop:4,fontSize:11,color:C.red}}>⚠️ Reported {w.sick} sick pig(s)</div>}
+      </div>);
+    })}
+    {/* Attendance summary */}
+    {workers.length>0&&<div style={S.card}>
+      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:10}}>📅 Attendance — Last 30 Days</div>
+      {ranked.map(w=>(
+        <div key={w.id} style={{...S.row,marginBottom:8}}>
+          <span style={{color:C.text,fontSize:13}}>{w.name}</span>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div style={{width:80,height:5,background:C.elevated,borderRadius:5,overflow:"hidden"}}>
+              <div style={{height:"100%",width:w.attendance+"%",background:w.attendance>=80?C.accent:w.attendance>=50?C.amber:C.red,borderRadius:5}}/>
+            </div>
+            <span style={{fontSize:12,fontWeight:700,color:w.attendance>=80?C.accent:w.attendance>=50?C.amber:C.red,minWidth:35}}>{w.attendance}%</span>
+          </div>
+        </div>
+      ))}
+    </div>}
+  </div>);
+}
+
+/* ═══════════════════════════════════════════════════
+   2. WEEKLY REPORT
+═══════════════════════════════════════════════════ */
+function WeeklyReport({pigs,feeds,sales,logs,expenses,incomes,users,stock}){
+  // Get this week's date range
+  const today=new Date();
+  const dayOfWeek=today.getDay();
+  const monday=new Date(today);monday.setDate(today.getDate()-(dayOfWeek===0?6:dayOfWeek-1));
+  const weekStart=monday.toISOString().slice(0,10);
+  const lastMonday=new Date(monday);lastMonday.setDate(monday.getDate()-7);
+  const lastWeekStart=lastMonday.toISOString().slice(0,10);
+  const lastWeekEnd=new Date(monday);lastWeekEnd.setDate(monday.getDate()-1);
+  const lastWeekEndStr=lastWeekEnd.toISOString().slice(0,10);
+
+  function inRange(date,start,end){return date>=start&&date<=end;}
+
+  // This week
+  const wLogs=logs.filter(l=>l.date>=weekStart);
+  const wFeeds=feeds.filter(f=>f.date>=weekStart);
+  const wSales=sales.filter(s=>s.date>=weekStart);
+  const wInc=wSales.reduce((s,x)=>s+(x.total||0),0)+incomes.filter(i=>i.date>=weekStart).reduce((s,x)=>s+(x.amount||0),0);
+  const wExp=wFeeds.reduce((s,x)=>s+(x.cost||0),0)+expenses.filter(e=>e.date>=weekStart).reduce((s,x)=>s+(x.amount||0),0);
+  const wProfit=wInc-wExp;
+  const wSick=wLogs.reduce((s,l)=>s+(l.sick||0),0);
+  const wDeaths=wLogs.reduce((s,l)=>s+(l.deaths||0),0);
+  const wBirths=wLogs.reduce((s,l)=>s+(l.births||0),0);
+
+  // Last week
+  const lwSales=sales.filter(s=>inRange(s.date,lastWeekStart,lastWeekEndStr));
+  const lwInc=lwSales.reduce((s,x)=>s+(x.total||0),0)+incomes.filter(i=>inRange(i.date,lastWeekStart,lastWeekEndStr)).reduce((s,x)=>s+(x.amount||0),0);
+  const lwExp=feeds.filter(f=>inRange(f.date,lastWeekStart,lastWeekEndStr)).reduce((s,x)=>s+(x.cost||0),0)+expenses.filter(e=>inRange(e.date,lastWeekStart,lastWeekEndStr)).reduce((s,x)=>s+(x.amount||0),0);
+  const lwProfit=lwInc-lwExp;
+
+  const profitChange=lwProfit>0?Math.round(((wProfit-lwProfit)/lwProfit)*100):0;
+  const lowStock=stock.filter(s=>s.quantity<=s.minLevel);
+  const workers=users.filter(u=>u.role==="worker"&&u.approved);
+  const activeToday=new Set(logs.filter(l=>l.date===toDay()).map(l=>l.workerId)).size;
+
+  return(<div>
+    <div style={S.h1}>📊 Weekly Report</div>
+    <div style={S.sub}>Week from {weekStart} · Auto-generated</div>
+
+    {/* This week summary */}
+    <div style={S.g4}>
+      {[
+        {l:"This Week Income",v:fmtRWF(wInc),c:"#10b981"},
+        {l:"This Week Expenses",v:fmtRWF(wExp),c:C.red},
+        {l:"This Week Profit",v:fmtRWF(wProfit),c:wProfit>=0?C.accent:C.red},
+        {l:"vs Last Week",v:(profitChange>=0?"+":"")+profitChange+"%",c:profitChange>=0?C.accent:C.red},
+      ].map(s=>(
+        <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c,fontSize:14}}>{s.v}</div></div>
+      ))}
+    </div>
+
+    {/* Health this week */}
+    <div style={S.g4}>
+      {[
+        {l:"Daily Reports",v:wLogs.length,c:C.accent},
+        {l:"Sick Pigs Reported",v:wSick,c:wSick>0?C.red:C.accent},
+        {l:"Deaths",v:wDeaths,c:wDeaths>0?C.red:C.accent},
+        {l:"New Births",v:wBirths,c:C.purple},
+      ].map(s=>(
+        <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
+      ))}
+    </div>
+
+    {/* Low stock alerts */}
+    {lowStock.length>0&&<div style={{...S.card,background:"rgba(239,68,68,.05)",border:"1px solid rgba(239,68,68,.25)",marginBottom:14}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.red,marginBottom:8}}>📦 Low Stock Alerts ({lowStock.length})</div>
+      {lowStock.map(s=>(
+        <div key={s.id} style={S.row}>
+          <span style={{color:C.text}}>{s.name}</span>
+          <span style={{color:C.red,fontWeight:700}}>{s.quantity}{s.unit} left (min: {s.minLevel})</span>
+        </div>
+      ))}
+    </div>}
+
+    {/* Worker activity */}
+    <div style={S.card}>
+      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:10}}>👷 Worker Activity This Week</div>
+      {workers.length===0&&<div style={{color:C.faint,fontSize:13}}>No workers yet.</div>}
+      {workers.map(w=>{
+        const wl=wLogs.filter(l=>l.workerId===w.id).length;
+        const wf=wFeeds.filter(f=>f.workerId===w.id).length;
+        const ws=wSales.filter(s=>s.workerId===w.id).length;
+        const active=logs.some(l=>l.workerId===w.id&&l.date===toDay());
+        return(<div key={w.id} style={{...S.row,marginBottom:6}}>
+          <div>
+            <span style={{fontWeight:600,color:C.text}}>{w.name}</span>
+            <span style={{marginLeft:8,fontSize:10,padding:"2px 7px",borderRadius:10,background:active?"rgba(22,163,74,.12)":"rgba(239,68,68,.1)",color:active?C.accent:C.red}}>{active?"● Active today":"○ No report today"}</span>
+          </div>
+          <div style={{fontSize:11,color:C.faint}}>{wl} logs · {wf} feeds · {ws} sales</div>
+        </div>);
+      })}
+    </div>
+
+    {/* Sales this week */}
+    {wSales.length>0&&<div style={S.card}>
+      <div style={{fontSize:13,fontWeight:700,color:"#10b981",marginBottom:10}}>🏷️ Sales This Week ({wSales.length})</div>
+      {wSales.map((s,i)=>{
+        const pig=pigs.find(p=>p.id===s.pigId);
+        return(<div key={i} style={S.row}>
+          <span style={{color:C.muted,fontSize:12}}>{s.date} · {s.worker} · {pig?pig.tag:"—"}</span>
+          <span style={{color:"#10b981",fontWeight:700}}>{fmtRWF(s.total)}</span>
+        </div>);
+      })}
+    </div>}
+  </div>);
+}
+
+/* ═══════════════════════════════════════════════════
+   3. TASK ASSIGNMENT
+═══════════════════════════════════════════════════ */
+function TaskManager({user,users,tasks,setTasks}){
+  const isAdmin=user.role==="admin";
+  const workers=users.filter(u=>u.role==="worker"&&u.approved);
+  const [form,setForm]=useState({title:"",desc:"",workerId:"",priority:"Normal",due:toDay()});
+  const [saved,setSaved]=useState(false);
+  const myTasks=isAdmin?tasks:tasks.filter(t=>t.workerId===user.id);
+
+  async function addTask(){
+    if(!form.title||(!isAdmin?false:!form.workerId)) return;
+    const newTask={...form,id:uid(),createdBy:user.name,createdAt:toDay(),status:"pending",workerId:isAdmin?form.workerId:user.id};
+    setTasks(p=>[...p,newTask]);
+    try{await jbinAppend("tasks",newTask);setSaved(true);setTimeout(()=>{setSaved(false);setForm({title:"",desc:"",workerId:"",priority:"Normal",due:toDay()});},2000);}
+    catch(e){alert("❌ Failed to save task.");}
+  }
+
+  async function updateStatus(id,status){
+    const updated=tasks.map(t=>t.id===id?{...t,status}:t);
+    setTasks(updated);
+    try{
+      const data=await getOnlineFarmData()||{};
+      await setOnlineFarmData({...data,tasks:updated});
+    }catch(e){console.error("task update error",e);}
+  }
+
+  const pending=myTasks.filter(t=>t.status==="pending");
+  const done=myTasks.filter(t=>t.status==="done");
+  const priorityColor={High:C.red,Normal:C.accent,Low:C.muted};
+
+  return(<div>
+    <div style={S.h1}>✅ Task Manager</div>
+    <div style={S.sub}>{pending.length} pending · {done.length} completed</div>
+
+    {/* Add task — admin only */}
+    {isAdmin&&<div style={{...S.card,marginBottom:16}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:12}}>➕ Assign New Task</div>
+      {saved&&<div style={{padding:8,background:C.accentSoft,borderRadius:7,marginBottom:10,color:C.accent,fontSize:13}}>✓ Task assigned!</div>}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+        <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Task Title *</label><input placeholder="e.g. Clean pig pens" value={form.title} onChange={e=>setForm({...form,title:e.target.value})} style={S.inp}/></div>
+        <div><label style={S.lbl}>Assign To *</label>
+          <select value={form.workerId} onChange={e=>setForm({...form,workerId:e.target.value})} style={S.inp}>
+            <option value="">Select worker</option>
+            {workers.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+        </div>
+        <div><label style={S.lbl}>Priority</label>
+          <select value={form.priority} onChange={e=>setForm({...form,priority:e.target.value})} style={S.inp}>
+            {["High","Normal","Low"].map(p=><option key={p}>{p}</option>)}
+          </select>
+        </div>
+        <div><label style={S.lbl}>Due Date</label><input type="date" value={form.due} onChange={e=>setForm({...form,due:e.target.value})} style={S.inp}/></div>
+        <div><label style={S.lbl}>Description</label><input placeholder="Details..." value={form.desc} onChange={e=>setForm({...form,desc:e.target.value})} style={S.inp}/></div>
+      </div>
+      <button onClick={addTask} style={{...S.btn(),width:"100%",padding:11,fontSize:14}}>Assign Task →</button>
+    </div>}
+
+    {/* Pending tasks */}
+    {pending.length===0&&<div style={{...S.card,color:C.faint,fontSize:13,textAlign:"center"}}>
+      {isAdmin?"No pending tasks. Assign one above!":"No tasks assigned to you yet."}
+    </div>}
+    {pending.map(t=>{
+      const worker=users.find(u=>u.id===t.workerId);
+      const overdue=t.due&&t.due<toDay();
+      return(<div key={t.id} style={{...S.card,marginBottom:10,border:"1px solid "+(overdue?"rgba(239,68,68,.3)":C.border)}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+          <div>
+            <div style={{fontWeight:700,color:C.text,fontSize:14}}>{t.title}</div>
+            {t.desc&&<div style={{fontSize:12,color:C.muted,marginTop:2}}>{t.desc}</div>}
+          </div>
+          <span style={{padding:"2px 9px",borderRadius:12,background:priorityColor[t.priority]+"22",color:priorityColor[t.priority],fontSize:11,fontWeight:700,flexShrink:0}}>{t.priority}</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,color:C.faint,marginBottom:10}}>
+          <span>👤 {worker?worker.name:"—"} · 📅 Due: <span style={{color:overdue?C.red:C.muted,fontWeight:overdue?700:400}}>{t.due}{overdue?" ⚠️ OVERDUE":""}</span></span>
+          <span>By: {t.createdBy}</span>
+        </div>
+        <button onClick={()=>updateStatus(t.id,"done")} style={{...S.btn(C.accent),fontSize:12,padding:"6px 14px",width:"100%"}}>✓ Mark as Done</button>
+      </div>);
+    })}
+
+    {/* Completed tasks */}
+    {done.length>0&&<div style={S.card}>
+      <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:10}}>✅ Completed ({done.length})</div>
+      {done.slice().reverse().map(t=>{
+        const worker=users.find(u=>u.id===t.workerId);
+        return(<div key={t.id} style={{...S.row,opacity:.7}}>
+          <span style={{color:C.muted,fontSize:12,textDecoration:"line-through"}}>{t.title} · {worker?worker.name:"—"}</span>
+          <span style={{color:C.accent,fontSize:11}}>✓ Done</span>
+        </div>);
+      })}
+    </div>}
+  </div>);
+}
+
+/* ═══════════════════════════════════════════════════
+   4. VACCINATION TRACKER
+═══════════════════════════════════════════════════ */
+function VaccinationTracker({pigs,users,vaccinations,setVaccinations,user}){
+  const isAdmin=user.role==="admin";
+  const active=pigs.filter(p=>p.status==="active");
+  const [form,setForm]=useState({pigId:"",vaccine:"CSF Vaccine",date:toDay(),nextDue:"",notes:"",givenBy:user.name});
+  const [saved,setSaved]=useState(false);
+  const VACCINES=["CSF Vaccine","FMD Vaccine","Ivermectin","Dewormer","Vitamin B12","Other"];
+
+  async function save(){
+    if(!form.pigId||!form.date)return;
+    const nextDue=form.nextDue||addDays(form.date,180);
+    const newVac={...form,id:uid(),nextDue,createdAt:toDay()};
+    setVaccinations(p=>[...p,newVac]);
+    try{await jbinAppend("vaccinations",newVac);setSaved(true);setTimeout(()=>{setSaved(false);setForm({pigId:"",vaccine:"CSF Vaccine",date:toDay(),nextDue:"",notes:"",givenBy:user.name});},2000);}
+    catch(e){alert("❌ Failed to save.");}
+  }
+
+  const due=vaccinations.filter(v=>{
+    const d=daysDiff(v.nextDue);
+    return d>=0&&d<=14;
+  });
+  const overdue=vaccinations.filter(v=>daysDiff(v.nextDue)<0);
+
+  return(<div>
+    <div style={S.h1}>💉 Vaccination Tracker</div>
+    <div style={S.sub}>Track vaccinations · Get due date alerts</div>
+
+    {/* Alerts */}
+    {overdue.length>0&&<div style={{...S.card,background:"rgba(239,68,68,.06)",border:"1px solid rgba(239,68,68,.3)",marginBottom:12}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.red,marginBottom:8}}>⚠️ Overdue Vaccinations ({overdue.length})</div>
+      {overdue.map(v=>{const pig=pigs.find(p=>p.id===v.pigId);return(
+        <div key={v.id} style={S.row}><span style={{color:C.text}}>{pig?pig.tag:"—"} — {v.vaccine}</span><span style={{color:C.red,fontWeight:700}}>{Math.abs(daysDiff(v.nextDue))} days overdue</span></div>
+      );})}
+    </div>}
+    {due.length>0&&<div style={{...S.card,background:"rgba(245,158,11,.06)",border:"1px solid rgba(245,158,11,.3)",marginBottom:12}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.amber,marginBottom:8}}>🔔 Due Soon ({due.length})</div>
+      {due.map(v=>{const pig=pigs.find(p=>p.id===v.pigId);return(
+        <div key={v.id} style={S.row}><span style={{color:C.text}}>{pig?pig.tag:"—"} — {v.vaccine}</span><span style={{color:C.amber,fontWeight:700}}>Due in {daysDiff(v.nextDue)} days</span></div>
+      );})}
+    </div>}
+
+    {/* Log vaccination */}
+    <div style={{...S.card,marginBottom:16}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:12}}>💉 Log Vaccination</div>
+      {saved&&<div style={{padding:8,background:C.accentSoft,borderRadius:7,marginBottom:10,color:C.accent,fontSize:13}}>✓ Vaccination recorded!</div>}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+        <div><label style={S.lbl}>Pig *</label>
+          <select value={form.pigId} onChange={e=>setForm({...form,pigId:e.target.value})} style={S.inp}>
+            <option value="">Select pig</option>
+            {active.map(p=><option key={p.id} value={p.id}>{p.tag} — {p.stage}</option>)}
+          </select>
+        </div>
+        <div><label style={S.lbl}>Vaccine *</label>
+          <select value={form.vaccine} onChange={e=>setForm({...form,vaccine:e.target.value})} style={S.inp}>
+            {VACCINES.map(v=><option key={v}>{v}</option>)}
+          </select>
+        </div>
+        <div><label style={S.lbl}>Date Given</label><input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} style={S.inp}/></div>
+        <div><label style={S.lbl}>Next Due Date</label><input type="date" value={form.nextDue} onChange={e=>setForm({...form,nextDue:e.target.value})} style={S.inp}/></div>
+        <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Notes</label><input placeholder="Any observations..." value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} style={S.inp}/></div>
+      </div>
+      <button onClick={save} style={{...S.btn(C.accent),width:"100%",padding:11,fontSize:14}}>💉 Save Vaccination →</button>
+    </div>
+
+    {/* History */}
+    <div style={S.card}>
+      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:10}}>📋 Vaccination History ({vaccinations.length})</div>
+      {vaccinations.length===0&&<div style={{color:C.faint,fontSize:13}}>No vaccinations recorded yet.</div>}
+      {vaccinations.slice().reverse().map((v,i)=>{
+        const pig=pigs.find(p=>p.id===v.pigId);
+        const dLeft=daysDiff(v.nextDue);
+        return(<div key={i} style={S.row}>
+          <div>
+            <div style={{fontWeight:600,color:C.text}}>{pig?pig.tag:"—"} — {v.vaccine}</div>
+            <div style={{fontSize:11,color:C.faint}}>Given: {v.date} · By: {v.givenBy}</div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:11,color:dLeft<0?C.red:dLeft<=14?C.amber:C.accent,fontWeight:600}}>
+              Next: {v.nextDue}
+            </div>
+            <div style={{fontSize:10,color:C.faint}}>{dLeft<0?"Overdue":dLeft===0?"Today!":"In "+dLeft+" days"}</div>
+          </div>
+        </div>);
+      })}
     </div>
   </div>);
 }
@@ -2047,11 +2482,7 @@ function Login({users,setUsers,setUser}){
             ℹ️ New accounts require <strong>admin approval</strong> before you can log in. The farm admin will be notified.
           </div>}
 
-          {/* Demo credentials (login only) */}
-          {tab==="login"&&<div style={{marginTop:16,padding:"10px 14px",background:"rgba(22,163,74,.05)",border:"1px solid rgba(22,163,74,.15)",borderRadius:9,fontSize:12,color:"#64748b",lineHeight:1.7}}>
-            <div style={{fontWeight:700,color:"#16a34a",marginBottom:4}}>🔑 Demo Access</div>
-            <div>Admin → username: <code style={{background:"#e2e8f0",borderRadius:4,padding:"1px 5px",color:"#1e293b"}}>admin</code> / password: <code style={{background:"#e2e8f0",borderRadius:4,padding:"1px 5px",color:"#1e293b"}}>admin123</code></div>
-          </div>}
+
         </div>
       </div>
     </div>
@@ -2275,6 +2706,57 @@ function DLogs({logs,pigs,feeds,sales,expenses,incomes,allData}){
       <div style={{fontSize:14,fontWeight:700,color:C.accent,margin:"6px 0 12px"}}>✦ AI Health Analysis</div>
       <AIPrediction pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} topic="Disease pattern analysis, mortality risk, vaccination schedule Rwanda, biosecurity improvements." label="Daily Health Insight" icon="📋"/>
     </>)}
+  </div>);
+}
+
+
+/* ─── Change Password ─── */
+function ChangePassword({user,users,setUsers}){
+  const [form,setForm]=useState({current:"",newPass:"",confirm:""});
+  const [err,setErr]=useState("");
+  const [ok,setOk]=useState("");
+  const [saving,setSaving]=useState(false);
+
+  async function save(){
+    setErr("");setOk("");
+    if(!form.current||!form.newPass||!form.confirm) return setErr("Please fill in all fields.");
+    if(form.newPass.length<6) return setErr("New password must be at least 6 characters.");
+    if(form.newPass!==form.confirm) return setErr("New passwords do not match.");
+    const me=users.find(u=>u.id===user.id);
+    if(!me||me.password!==form.current) return setErr("Current password is incorrect.");
+    setSaving(true);
+    const updated=users.map(u=>u.id===user.id?{...u,password:form.newPass}:u);
+    setUsers(updated);
+    try{
+      await setOnlineUsers(updated);
+      setOk("✅ Password changed successfully!");
+      setForm({current:"",newPass:"",confirm:""});
+    }catch(e){setErr("Failed to save. Check internet and try again.");}
+    setSaving(false);
+  }
+
+  return(<div style={{maxWidth:420}}>
+    <div style={S.h1}>🔒 Change Password</div>
+    <div style={S.sub}>Update your login password</div>
+    <div style={S.card}>
+      {err&&<div style={{padding:"9px 13px",background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.25)",borderRadius:8,color:C.red,fontSize:13,marginBottom:12}}>{err}</div>}
+      {ok&&<div style={{padding:"9px 13px",background:"rgba(22,163,74,.08)",border:"1px solid rgba(22,163,74,.25)",borderRadius:8,color:C.accent,fontSize:13,marginBottom:12}}>{ok}</div>}
+      <div style={{marginBottom:12}}>
+        <label style={S.lbl}>Current Password</label>
+        <input type="password" placeholder="Enter current password" value={form.current} onChange={e=>setForm({...form,current:e.target.value})} style={S.inp}/>
+      </div>
+      <div style={{marginBottom:12}}>
+        <label style={S.lbl}>New Password</label>
+        <input type="password" placeholder="Min 6 characters" value={form.newPass} onChange={e=>setForm({...form,newPass:e.target.value})} style={S.inp}/>
+      </div>
+      <div style={{marginBottom:16}}>
+        <label style={S.lbl}>Confirm New Password</label>
+        <input type="password" placeholder="Repeat new password" value={form.confirm} onChange={e=>setForm({...form,confirm:e.target.value})} style={S.inp}/>
+      </div>
+      <button onClick={save} disabled={saving} style={{...S.btn(),width:"100%",padding:12,fontSize:14}}>
+        {saving?"⏳ Saving...":"🔒 Change Password"}
+      </button>
+    </div>
   </div>);
 }
 
