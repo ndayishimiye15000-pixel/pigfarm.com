@@ -1906,6 +1906,8 @@ function App(){
     {id:"pigs",l:"🐷 Pigs"},
     {id:"feeding",l:"🌾 Feeding"},
     {id:"sales",l:"🏷️ Sales"},
+    {id:"adminbuy",l:"🛒 Record Purchase"},
+    {id:"adminsell",l:"💰 Record Sale"},
     {id:"daylogs",l:"📋 Daily Logs"},
     {id:"messages",l:"📢 Messages"+(messages.length?" ("+messages.length+")":"")},
     {id:"workers",l:"👷 Workers"+(pending.length?" ("+pending.length+")":"")},
@@ -2007,6 +2009,8 @@ function App(){
       {isAdmin&&page==="workers"&&<Workers users={users} setUsers={setUsers}/>}
       {isAdmin&&page==="remote"&&<RemoteWorkAdmin sessions={sessions} setSessions={setSessions} users={users}/>}
       {isAdmin&&page==="capital"&&<CapitalManager capital={capital} setCapital={setCapital} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} pigs={pigs} user={user}/>}
+      {isAdmin&&page==="adminbuy"&&<BEntry user={user} expenses={expenses} setExpenses={setExpenses} capital={capital} setCapital={setCapital}/>}
+      {isAdmin&&page==="adminsell"&&<SEntry user={user} pigs={pigs} setPigs={setPigs} sales={sales} setSales={setSales} capital={capital} setCapital={setCapital}/>}
       {!isAdmin&&page==="home"&&<WHome user={user} logs={logs} feeds={feeds} sales={sales} messages={messages}/>}
       {!isAdmin&&page==="inbox"&&<WorkerInbox messages={messages}/>}
       {!isAdmin&&page==="dailyentry"&&<DEntry user={user} pigs={pigs} logs={logs} setLogs={setLogs} capital={capital} setCapital={setCapital}/>}
@@ -4442,7 +4446,7 @@ function BEntry({user,expenses,setExpenses,capital,setCapital}){
     return f;
   }
 
-  async function doSave(){
+  function doSave(){
     setConfirm(false);
     if(!total||total<=0) return;
     const newExp={
@@ -4461,6 +4465,7 @@ function BEntry({user,expenses,setExpenses,capital,setCapital}){
       notes:form.notes,
       source:"worker_purchase"
     };
+    // setExpenses triggers Firestore auto-sync via useEffect in App (same pattern as Ledger)
     setExpenses(p=>[...p,newExp]);
     if(setCapital) capitalTx(capital,setCapital,{
       type:"expense",
@@ -4469,26 +4474,23 @@ function BEntry({user,expenses,setExpenses,capital,setCapital}){
       description:`${form.item||form.category}${form.quantity?" "+form.quantity+" "+form.unit:""}${form.supplier?" from "+form.supplier:""} — by ${user.name}`,
       date:form.date
     });
-    try{
-      await jbinAppend("expenses",newExp);
-      setToast({type:"success",message:`✅ Purchase of ${fmtRWF(total)} recorded!`});
-      setSaved(true);
-      setTimeout(()=>{
-        setSaved(false);
-        setForm({category:"Feed Purchase",item:"",quantity:"",unit:"kg",unitPrice:"",totalAmount:"",supplier:"",date:toDay(),notes:""});
-      },2200);
-    }catch(e){setToast({type:"error",message:"Failed to save. Check internet."});}
+    setToast({type:"success",message:`✅ Purchase of ${fmtRWF(total)} recorded!`});
+    setSaved(true);
+    setTimeout(()=>{
+      setSaved(false);
+      setForm({category:"Feed Purchase",item:"",quantity:"",unit:"kg",unitPrice:"",totalAmount:"",supplier:"",date:toDay(),notes:""});
+    },2200);
   }
 
   function trySubmit(){
-    if(!form.item||!total||total<=0) return;
+    if(!total||total<=0) return;
     setConfirm(true);
   }
 
   return(<div style={{maxWidth:520}}>
     {confirm&&<ConfirmDialog
       title="Record This Purchase?"
-      body={`${form.item} — ${form.quantity?form.quantity+" "+form.unit+" @ RWF "+form.unitPrice+"/"+form.unit+" = ":""}RWF ${Math.round(total).toLocaleString()}${form.supplier?" from "+form.supplier:""}. This will be recorded as a ${form.category} expense. Confirm?`}
+      body={`${form.item||form.category} — ${form.quantity?form.quantity+" "+form.unit+(form.unitPrice?" @ RWF "+form.unitPrice+"/"+form.unit:"")+" = ":""}RWF ${Math.round(total).toLocaleString()}${form.supplier?" from "+form.supplier:""}. Recorded as ${form.category} expense. Confirm?`}
       onConfirm={doSave} onCancel={()=>setConfirm(false)}/>}
     {toast&&<Toast message={toast.message} type={toast.type} onClose={closeToast}/>}
     <div style={S.h1}>🛒 Log Purchase</div>
@@ -4544,12 +4546,12 @@ function BEntry({user,expenses,setExpenses,capital,setCapital}){
       </div>}
 
       <button
-        disabled={!form.item||!total||total<=0}
-        style={{...S.btn(C.red),color:"#fff",width:"100%",padding:12,fontSize:14,opacity:(!form.item||!total)?0.5:1}}
+        disabled={!total||total<=0}
+        style={{...S.btn(C.red),color:"#fff",width:"100%",padding:12,fontSize:14,opacity:(!total||total<=0)?0.5:1}}
         onClick={trySubmit}>
         🛒 Save Purchase →
       </button>
-      {(!form.item||!total)&&<div style={{fontSize:11,color:C.faint,marginTop:7,textAlign:"center"}}>Enter item name and total amount to save</div>}
+      {(!total||total<=0)&&<div style={{fontSize:11,color:C.faint,marginTop:7,textAlign:"center"}}>Enter a total amount to save</div>}
     </div>
   </div>);
 }
