@@ -3491,12 +3491,75 @@ function WorkerInbox({messages}){
   </div>);
 }
 
+/* ─── Toast Notification ─── */
+function Toast({message,type,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3200);return()=>clearTimeout(t);},[onClose]);
+  const bg=type==="success"?"#16a34a":type==="error"?"#dc2626":"#f59e0b";
+  const icon=type==="success"?"✅":type==="error"?"❌":"⚠️";
+  return(
+    <div className="fade-in" style={{
+      position:"fixed",bottom:24,right:24,zIndex:9999,
+      background:bg,color:"#fff",
+      padding:"13px 18px",borderRadius:12,
+      display:"flex",alignItems:"center",gap:10,
+      boxShadow:"0 8px 30px rgba(0,0,0,.18)",
+      fontSize:14,fontWeight:600,maxWidth:320,
+      animation:"fadeIn .3s ease both"
+    }}>
+      <span style={{fontSize:18}}>{icon}</span>
+      <span>{message}</span>
+      <button onClick={onClose} style={{marginLeft:"auto",background:"none",border:"none",color:"rgba(255,255,255,.8)",cursor:"pointer",fontSize:18,lineHeight:1,padding:0}}>×</button>
+    </div>
+  );
+}
+
+/* ─── Confirm Dialog ─── */
+function ConfirmDialog({title,body,onConfirm,onCancel}){
+  return(
+    <div style={{
+      position:"fixed",inset:0,zIndex:9998,
+      background:"rgba(0,0,0,.45)",
+      display:"flex",alignItems:"center",justifyContent:"center",
+      padding:16
+    }}>
+      <div className="fade-in" style={{
+        background:"#fff",borderRadius:16,padding:24,
+        maxWidth:360,width:"100%",
+        boxShadow:"0 20px 60px rgba(0,0,0,.22)"
+      }}>
+        <div style={{fontSize:20,marginBottom:6,fontWeight:700,color:"#1e293b"}}>{title}</div>
+        <div style={{fontSize:13,color:"#64748b",marginBottom:20,lineHeight:1.6}}>{body}</div>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={onCancel} style={{flex:1,padding:"10px 0",borderRadius:9,border:"1px solid #cbd5e1",background:"#f8fafc",color:"#64748b",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+          <button onClick={onConfirm} style={{flex:1,padding:"10px 0",borderRadius:9,border:"none",background:"#16a34a",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Yes, Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DEntry({user,pigs,logs,setLogs}){
   const active=pigs.filter(p=>p.status==="active");
   const [form,setForm]=useState({checked:active.length,sick:0,deaths:0,births:0,water:true,cleaned:true,notes:""});
   const [done,setDone]=useState(false);
+  const [confirm,setConfirm]=useState(false);
+  const [toast,setToast]=useState(null);
+  const closeToast=useCallback(()=>setToast(null),[]);
+  async function doSave(){
+    setConfirm(false);
+    const newLog={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay()};
+    setLogs(p=>[...p,newLog]);
+    try{
+      await jbinAppend("logs",newLog);
+      setToast({type:"success",message:"Daily report saved successfully!"});
+      setTimeout(()=>setDone(true),1600);
+    }catch(e){setToast({type:"error",message:"Failed to save. Check internet and try again."});}
+  }
   if(logs.some(l=>l.workerId===user.id&&l.date===toDay())||done)return(<div style={{textAlign:"center",padding:60}}><div style={{fontSize:48}}>✅</div><div style={{fontSize:19,fontWeight:700,color:C.accent,marginTop:14}}>Report submitted!</div><div style={{fontSize:13,color:C.faint,marginTop:6}}>Come back tomorrow.</div></div>);
-  return(<div style={{maxWidth:490}}><div style={S.h1}>Daily Report — {toDay()}</div><div style={S.card}>
+  return(<div style={{maxWidth:490}}>
+    {confirm&&<ConfirmDialog title="Submit Daily Report?" body={`Checked: ${form.checked} pigs · Sick: ${form.sick} · Deaths: ${form.deaths} · Births: ${form.births}. Are you sure you want to submit this report for ${toDay()}?`} onConfirm={doSave} onCancel={()=>setConfirm(false)}/>}
+    {toast&&<Toast message={toast.message} type={toast.type} onClose={closeToast}/>}
+    <div style={S.h1}>Daily Report — {toDay()}</div><div style={S.card}>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
       {[["checked","Pigs Checked"],["sick","Sick Pigs"],["deaths","Deaths"],["births","New Births"]].map(([k,l])=>(
         <div key={k}><label style={S.lbl}>{l}</label><input type="number" min="0" value={form[k]} onChange={e=>setForm({...form,[k]:parseInt(e.target.value)||0})} style={S.inp}/></div>
@@ -3506,32 +3569,33 @@ function DEntry({user,pigs,logs,setLogs}){
       ))}
     </div>
     <div style={{marginBottom:12}}><label style={S.lbl}>Notes</label><textarea rows={3} value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="Any observations..." style={{...S.inp,resize:"vertical"}}/></div>
-    <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={async()=>{
-    const newLog={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay()};
-    setLogs(p=>[...p,newLog]);
-    try{
-      await jbinAppend("logs",newLog);
-      setDone(true);
-    }catch(e){alert("❌ Failed to save. Check internet and try again.");}
-  }}>Submit Report →</button>
+    <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={()=>setConfirm(true)}>Submit Report →</button>
   </div></div>);
 }
 
 function FEntry({user,pigs,feeds,setFeeds}){
   const [form,setForm]=useState({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});
   const [saved,setSaved]=useState(false);
+  const [confirm,setConfirm]=useState(false);
+  const [toast,setToast]=useState(null);
+  const closeToast=useCallback(()=>setToast(null),[]);
   const active=pigs.filter(p=>p.status==="active");
-  async function submit(){
-    if(!form.kg||!form.cost)return;
+  async function doSave(){
+    setConfirm(false);
     const newFeed={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg:parseFloat(form.kg),cost:parseFloat(form.cost)};
     setFeeds(p=>[...p,newFeed]);
     try{
       await jbinAppend("feeds",newFeed);
+      setToast({type:"success",message:"Feeding log saved successfully!"});
       setSaved(true);
       setTimeout(()=>{setSaved(false);setForm({pigId:"",feedType:"Maize bran",kg:"",cost:"",notes:""});},2000);
-    }catch(e){alert("❌ Failed to save. Check internet and try again.");}
+    }catch(e){setToast({type:"error",message:"Failed to save. Check internet and try again."});}
   }
-  return(<div style={{maxWidth:490}}><div style={S.h1}>Log Feeding</div>
+  function trySubmit(){if(!form.kg||!form.cost)return;setConfirm(true);}
+  return(<div style={{maxWidth:490}}>
+    {confirm&&<ConfirmDialog title="Save Feeding Log?" body={`${form.kg}kg of ${form.feedType} · Cost: RWF ${parseInt(form.cost||0).toLocaleString()}${form.pigId?" · Pig: "+active.find(p=>p.id===form.pigId)?.tag:"· All pigs"}. Confirm save?`} onConfirm={doSave} onCancel={()=>setConfirm(false)}/>}
+    {toast&&<Toast message={toast.message} type={toast.type} onClose={closeToast}/>}
+    <div style={S.h1}>Log Feeding</div>
     {saved&&<div style={{padding:10,background:C.accentSoft,borderRadius:7,marginBottom:12,color:C.accent,fontSize:13}}>✓ Saved!</div>}
     <div style={S.card}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
@@ -3541,7 +3605,7 @@ function FEntry({user,pigs,feeds,setFeeds}){
         <div><label style={S.lbl}>Cost (RWF)</label><input type="number" placeholder="3500" value={form.cost} onChange={e=>setForm({...form,cost:e.target.value})} style={S.inp}/></div>
       </div>
       <div style={{marginBottom:12}}><label style={S.lbl}>Notes</label><input placeholder="Observations..." value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} style={S.inp}/></div>
-      <button style={{...S.btn(C.amber),color:"#fff",width:"100%",padding:12,fontSize:14}} onClick={submit}>Save Feeding →</button>
+      <button style={{...S.btn(C.amber),color:"#fff",width:"100%",padding:12,fontSize:14}} onClick={trySubmit}>Save Feeding →</button>
     </div>
   </div>);
 }
@@ -3549,20 +3613,29 @@ function FEntry({user,pigs,feeds,setFeeds}){
 function SEntry({user,pigs,setPigs,sales,setSales}){
   const [form,setForm]=useState({pigId:"",buyer:"",weight:"",priceKg:"",total:"",notes:""});
   const [saved,setSaved]=useState(false);
+  const [confirm,setConfirm]=useState(false);
+  const [toast,setToast]=useState(null);
+  const closeToast=useCallback(()=>setToast(null),[]);
   const active=pigs.filter(p=>p.status==="active");
   function upd(f){return f.weight&&f.priceKg?{...f,total:(parseFloat(f.weight)*parseFloat(f.priceKg)).toString()}:f;}
-  async function submit(){
-    if(!form.total)return;
+  async function doSave(){
+    setConfirm(false);
     const newSale={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:parseFloat(form.total)};
     setSales(p=>[...p,newSale]);
     if(form.pigId) setPigs(p=>p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig));
     try{
       await jbinAppend("sales",newSale);
+      setToast({type:"success",message:`Sale of RWF ${Math.round(newSale.total).toLocaleString()} recorded!`});
       setSaved(true);
       setTimeout(()=>{setSaved(false);setForm({pigId:"",buyer:"",weight:"",priceKg:"",total:"",notes:""});},2000);
-    }catch(e){alert("❌ Failed to save. Check internet and try again.");}
+    }catch(e){setToast({type:"error",message:"Failed to save. Check internet and try again."});}
   }
-  return(<div style={{maxWidth:490}}><div style={S.h1}>Log a Sale</div>
+  function trySubmit(){if(!form.total)return;setConfirm(true);}
+  const selPig=active.find(p=>p.id===form.pigId);
+  return(<div style={{maxWidth:490}}>
+    {confirm&&<ConfirmDialog title="Record This Sale?" body={`${selPig?selPig.tag+" · ":""}Buyer: ${form.buyer||"—"} · ${form.weight}kg @ RWF ${parseInt(form.priceKg||0).toLocaleString()}/kg = RWF ${parseInt(form.total||0).toLocaleString()}. This will mark the pig as sold. Confirm?`} onConfirm={doSave} onCancel={()=>setConfirm(false)}/>}
+    {toast&&<Toast message={toast.message} type={toast.type} onClose={closeToast}/>}
+    <div style={S.h1}>Log a Sale</div>
     {saved&&<div style={{padding:10,background:C.accentSoft,borderRadius:7,marginBottom:12,color:C.accent,fontSize:13}}>✓ Sale recorded!</div>}
     <div style={S.card}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
@@ -3573,7 +3646,7 @@ function SEntry({user,pigs,setPigs,sales,setSales}){
         <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Total (RWF)</label><input type="number" placeholder="Auto-calculated" value={form.total} onChange={e=>setForm({...form,total:e.target.value})} style={S.inp}/></div>
       </div>
       <div style={{marginBottom:12}}><label style={S.lbl}>Notes</label><input placeholder="Notes..." value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} style={S.inp}/></div>
-      <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={submit}>Record Sale →</button>
+      <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={trySubmit}>Record Sale →</button>
     </div>
   </div>);
 }
