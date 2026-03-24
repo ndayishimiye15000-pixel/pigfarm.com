@@ -7,9 +7,7 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<!-- Firebase -->
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<!-- No Firebase — using JSONBin only -->
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:'Segoe UI',system-ui,sans-serif;background:#f0f4f8;color:#1e293b;
@@ -37,20 +35,7 @@ select option{background:#fff;color:#1e293b;}
 <body>
 <div id="root"></div>
 <div id="pdf-frame"></div>
-<script>
-// Initialize Firebase before React
-var firebaseConfig = {
-  apiKey: "AIzaSyCBH-3ql8onw17geHrJXKUwdhN-EVjtg14",
-  authDomain: "my-farm-track.firebaseapp.com",
-  projectId: "my-farm-track",
-  storageBucket: "my-farm-track.firebasestorage.app",
-  messagingSenderId: "529287963399",
-  appId: "1:529287963399:web:733a9828916b61f4525ba2",
-  measurementId: "G-064719MRR4"
-};
-firebase.initializeApp(firebaseConfig);
-var db = firebase.firestore();
-</script>
+<!-- JSONBin-only mode -->
 <script type="text/babel">
 const {useState,useEffect,useRef,useCallback}=React;
 const uid=()=>Math.random().toString(36).slice(2,10);
@@ -125,97 +110,80 @@ function daysDiff(dateStr){
 const GESTATION=114;
 const HEAT_CYCLE=21;
 
-/* ─── LocalStorage (non-user data) ─── */
-function getLS(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch{return d;}}
-function setLS(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
-
-/* ─── JSONBin Storage — Users + All Farm Data ─── */
+/* ═══════════════════════════════════════════════════
+   JSONBIN-ONLY STORAGE SYSTEM
+   All data lives in one JSONBin. Simple, reliable.
+═══════════════════════════════════════════════════ */
 const JBIN_KEY="$2a$10$LDktMj7oTNhMBjIidsIPoelQmzqlhnMXDvMyMHbIe9yYope1CnBLO";
-const JBIN_USERS_ID="69c02bc0aa77b81da90b0de5"; // existing bin for users
+const JBIN_USERS_ID="69c02bc0aa77b81da90b0de5";
 const JBIN_USERS_URL="https://api.jsonbin.io/v3/b/"+JBIN_USERS_ID;
-
-// We store all farm data (feeds, logs, sales) in a SECOND JSONBin bin
-// IMPORTANT: Create a new bin at jsonbin.io and paste its ID here
 const JBIN_FARM_ID="69c0da0caa77b81da90d88a5";
 const JBIN_FARM_URL="https://api.jsonbin.io/v3/b/"+JBIN_FARM_ID;
 
-/* ── Users ── */
+// In-memory write queue to prevent concurrent overwrites
+let _saveQueue=Promise.resolve();
+let _latestFarmData=null; // in-memory cache
+
 async function getOnlineUsers(){
   try{
-    const res=await fetch(JBIN_USERS_URL+"/latest",{
-      headers:{"X-Master-Key":JBIN_KEY,"X-Bin-Meta":"false"}
-    });
+    const res=await fetch(JBIN_USERS_URL+"/latest",{headers:{"X-Master-Key":JBIN_KEY,"X-Bin-Meta":"false"}});
     if(!res.ok) throw new Error("fetch failed "+res.status);
     const data=await res.json();
-    if(data&&data.list) return data.list;
-    return null;
-  }catch(e){console.error("JSONBin getUsers error",e);return null;}
+    return data&&data.list?data.list:null;
+  }catch(e){console.error("getUsers error",e);return null;}
 }
 async function setOnlineUsers(users){
   try{
-    const res=await fetch(JBIN_USERS_URL,{
-      method:"PUT",
-      headers:{"Content-Type":"application/json","X-Master-Key":JBIN_KEY},
-      body:JSON.stringify({list:users,updatedAt:new Date().toISOString()})
-    });
+    const res=await fetch(JBIN_USERS_URL,{method:"PUT",headers:{"Content-Type":"application/json","X-Master-Key":JBIN_KEY},body:JSON.stringify({list:users,updatedAt:new Date().toISOString()})});
     if(!res.ok) throw new Error("save failed "+res.status);
-  }catch(e){console.error("JSONBin setUsers error",e);throw e;}
+  }catch(e){console.error("setUsers error",e);throw e;}
 }
 
-/* ── Farm Data (feeds, logs, sales) ── */
-async function getOnlineFarmData(){
+async function _doGetFarm(){
   try{
-    const res=await fetch(JBIN_FARM_URL+"/latest",{
-      headers:{"X-Master-Key":JBIN_KEY,"X-Bin-Meta":"false"}
-    });
+    const res=await fetch(JBIN_FARM_URL+"/latest",{headers:{"X-Master-Key":JBIN_KEY,"X-Bin-Meta":"false"}});
     if(!res.ok) return null;
     const data=await res.json();
+    if(data) _latestFarmData={...data};
     return data||null;
-  }catch(e){console.error("JSONBin getFarmData error",e);return null;}
+  }catch(e){console.error("getFarm error",e);return null;}
 }
-async function setOnlineFarmData(data){
-  try{
-    const res=await fetch(JBIN_FARM_URL,{
-      method:"PUT",
-      headers:{"Content-Type":"application/json","X-Master-Key":JBIN_KEY},
-      body:JSON.stringify({...data,updatedAt:new Date().toISOString()})
-    });
-    if(!res.ok) throw new Error("save failed "+res.status);
-  }catch(e){console.error("JSONBin setFarmData error",e);throw e;}
-}
-// Safely append one item to a farm data array
-async function jbinAppend(key,newItem){
-  try{
-    const data=await getOnlineFarmData()||{};
-    const existing=data[key]||[];
-    // Avoid duplicates by id
-    const merged=[...existing.filter(x=>x.id!==newItem.id),newItem];
-    await setOnlineFarmData({...data,[key]:merged});
-  }catch(e){console.error("jbinAppend error",key,e);throw e;}
-}
-async function getOnlineSession(){
-  // Always return null — login required every time for security
-  return null;
-}
-async function setOnlineSession(user){
-  // Session not saved — login required every time for security
+async function getOnlineFarmData(){return _doGetFarm();}
+
+// Queued save — prevents concurrent writes overwriting each other
+function setOnlineFarmData(data){
+  _latestFarmData={...(_latestFarmData||{}), ...data, updatedAt:new Date().toISOString()};
+  _saveQueue=_saveQueue.then(async()=>{
+    try{
+      const res=await fetch(JBIN_FARM_URL,{method:"PUT",headers:{"Content-Type":"application/json","X-Master-Key":JBIN_KEY},body:JSON.stringify(_latestFarmData)});
+      if(!res.ok) console.error("setFarm failed",res.status);
+    }catch(e){console.error("setFarm error",e);}
+  });
+  return _saveQueue;
 }
 
-/* ─── Firestore Generic Sync Helpers ─── */
-async function fsSet(key,list){
-  try{await db.collection("farmiq").doc(key).set({list,updatedAt:new Date().toISOString()});}
-  catch(e){console.error("fsSet error",key,e);}
+// Save a single key in the farm data (uses cache to avoid re-fetch)
+function fsSet(key,list){
+  const patch={[key]:list};
+  return setOnlineFarmData(patch);
 }
+
+// Fake fsListen — loads once then calls setter (no Firestore needed)
 function fsListen(key,setter,setLoaded,fallback){
-  return db.collection("farmiq").doc(key).onSnapshot(doc=>{
-    if(doc.exists&&doc.data().list) setter(doc.data().list);
-    else if(fallback!==undefined) setter(fallback);
-    if(setLoaded) setLoaded(true);
-  },err=>{
-    console.error("fsListen error",key,err);
-    if(setLoaded) setLoaded(true);
-  });
+  // Just set loaded immediately; data is loaded in bulk on App mount
+  if(setLoaded) setTimeout(()=>setLoaded(true),0);
+  return ()=>{}; // no-op unsubscribe
 }
+
+async function jbinAppend(key,newItem){
+  const data=_latestFarmData||{};
+  const existing=data[key]||[];
+  const merged=[...existing.filter(x=>x.id!==newItem.id),newItem];
+  return fsSet(key,merged);
+}
+
+async function getOnlineSession(){return null;}
+async function setOnlineSession(user){}
 
 /* ─── API Key Store ─── */
 function getApiKey(){return localStorage.getItem("fiq_apikey")||"";}
@@ -1412,7 +1380,7 @@ function AIMessages({users,messages,setMessages,pigs,feeds,sales,logs,expenses,i
     else setText("⚠️ AI unavailable: "+res.text);
     setAiLoading(false);
   }
-  function send(){if(!text.trim())return;setSending(true);setTimeout(()=>{setMessages(p=>[...p,{id:uid(),text:text.trim(),from:"Farm Owner (Admin)",date:toDay(),time:new Date().toLocaleTimeString("en-RW",{hour:"2-digit",minute:"2-digit"}),recipients:workers.length,aiGenerated:false}]);setText("");setSending(false);},400);}
+  function send(){if(!text.trim())return;setSending(true);setTimeout(()=>{const newMsg={id:uid(),text:text.trim(),from:"Farm Owner (Admin)",date:toDay(),time:new Date().toLocaleTimeString("en-RW",{hour:"2-digit",minute:"2-digit"}),recipients:workers.length,aiGenerated:false};setMessages(p=>{const updated=[...p,newMsg];fsSet("messages",updated);return updated;});setText("");setSending(false);},400);}
   return(<div>
     <div style={S.h1}>📢 Messages to Workers</div>
     <div style={S.sub}>Broadcast to all {workers.length} active worker(s)</div>
@@ -1478,7 +1446,7 @@ function RemoteWorkPanel({user,sessions,setSessions,messages}){
       status:"pending", requestedAt:new Date().toISOString().slice(0,16).replace("T"," "),
       startedAt:new Date().toISOString(), approvedAt:null, endedAt:null, adminNote:""
     };
-    setSessions(p=>[...p,newSess]);
+    setSessions(p=>{const updated=[...p,newSess];setOnlineFarmData({sessions:updated});return updated;});
     setSaved(true); setErr("");
     setForm({computerName:"",computerSpec:"",location:"",purpose:"",notes:""});
     setTimeout(()=>setSaved(false),3000);
@@ -1487,7 +1455,7 @@ function RemoteWorkPanel({user,sessions,setSessions,messages}){
 
   function endSession(){
     if(!currentSession)return;
-    setSessions(p=>p.map(s=>s.id===currentSession.id?{...s,status:"ended",endedAt:new Date().toISOString().slice(0,16).replace("T"," ")}:s));
+    setSessions(p=>{const updated=p.map(s=>s.id===currentSession.id?{...s,status:"ended",endedAt:new Date().toISOString().slice(0,16).replace("T"," ")}:s);setOnlineFarmData({sessions:updated});return updated;});
   }
 
   const statusColor={pending:"#f59e0b",active:"#16a34a",ended:"#6b7280",rejected:"#ef4444"};
@@ -1607,16 +1575,16 @@ function RemoteWorkAdmin({sessions,setSessions,users}){
 
   function approve(id){
     const note=noteInput[id]||"";
-    setSessions(p=>p.map(s=>s.id===id?{...s,status:"active",approvedAt:new Date().toISOString().slice(0,16).replace("T"," "),adminNote:note}:s));
+    setSessions(p=>{const updated=p.map(s=>s.id===id?{...s,status:"active",approvedAt:new Date().toISOString().slice(0,16).replace("T"," "),adminNote:note}:s);setOnlineFarmData({sessions:updated});return updated;});
     setNoteInput(p=>({...p,[id]:""}));
   }
   function reject(id){
     const note=noteInput[id]||"Rejected by admin";
-    setSessions(p=>p.map(s=>s.id===id?{...s,status:"rejected",adminNote:note}:s));
+    setSessions(p=>{const updated=p.map(s=>s.id===id?{...s,status:"rejected",adminNote:note}:s);setOnlineFarmData({sessions:updated});return updated;});
     setNoteInput(p=>({...p,[id]:""}));
   }
   function terminate(id){
-    setSessions(p=>p.map(s=>s.id===id?{...s,status:"ended",endedAt:new Date().toISOString().slice(0,16).replace("T"," ")}:s));
+    setSessions(p=>{const updated=p.map(s=>s.id===id?{...s,status:"ended",endedAt:new Date().toISOString().slice(0,16).replace("T"," ")}:s);setOnlineFarmData({sessions:updated});return updated;});
   }
 
   const statusColor={pending:"#f59e0b",active:"#16a34a",ended:"#6b7280",rejected:"#ef4444"};
@@ -1755,22 +1723,34 @@ function App(){
   const [page,setPage]=useState("home");
   const [showApiModal,setShowApiModal]=useState(false);
 
-  // Load users from JSONBin on mount + poll every 15s
+  // ═══ JSONBIN-ONLY DATA LOADING ═══
+  // Load everything from JSONBin once on mount, then poll every 8s
+  const dataLoaded=useRef(false);
+
+  function applyFarmData(data){
+    if(!data) return;
+    if(data.pigs&&data.pigs.length>0){setPigs(data.pigs);}
+    if(data.feeds) setFeeds(data.feeds);
+    if(data.sales) setSales(data.sales);
+    if(data.logs)  setLogs(data.logs);
+    if(data.expenses) setExpenses(data.expenses);
+    if(data.incomes)  setIncomes(data.incomes);
+    if(data.messages) setMessages(data.messages);
+    if(data.reproductions) setReproductions(data.reproductions);
+    if(data.stock&&data.stock.length>0) setStock(data.stock);
+    if(data.tasks)        setTasks(data.tasks);
+    if(data.vaccinations) setVaccinations(data.vaccinations);
+    if(data.sessions)     setSessions(data.sessions);
+    if(data.capital)      setCapital(data.capital);
+  }
+
   useEffect(()=>{
-    // Initial session load
-    getOnlineSession().then(s=>{
-      if(s) setUser(s);
-      setSessionLoaded(true);
-    });
-    // Load users from JSONBin — admin credentials always come from INIT_USERS
+    // Load users
     getOnlineUsers().then(fresh=>{
       if(fresh&&fresh.length>0){
-        // Force admin account from INIT_USERS — never let JSONBin override admin credentials
         const workers=fresh.filter(u=>u.role!=="admin");
         const merged=[...INIT_USERS,...workers];
         setUsers(merged);
-        // Also save back to fix JSONBin
-        setOnlineUsers(merged);
       } else {
         setOnlineUsers(INIT_USERS);
         setUsers([...INIT_USERS]);
@@ -1778,164 +1758,64 @@ function App(){
       setUsersLoaded(true);
     }).catch(()=>{setUsers([...INIT_USERS]);setUsersLoaded(true);});
 
-    // Load farm data from JSONBin on startup
+    // Load all farm data once
     getOnlineFarmData().then(data=>{
-      if(data){
-        if(data.logs&&data.logs.length>0) setLogs([...data.logs]);
-        if(data.feeds&&data.feeds.length>0) setFeeds([...data.feeds]);
-        if(data.sales&&data.sales.length>0) setSales([...data.sales]);
-        if(data.tasks&&data.tasks.length>0) setTasks([...data.tasks]);
-        if(data.vaccinations&&data.vaccinations.length>0) setVaccinations([...data.vaccinations]);
-      }
-    }).catch(e=>console.error("initial farm load error",e));
+      applyFarmData(data);
+      dataLoaded.current=true;
+      // Mark all as loaded
+      setPigsLoaded(true);setFeedsLoaded(true);setSalesLoaded(true);
+      setLogsLoaded(true);setExpensesLoaded(true);setIncomesLoaded(true);
+      setMessagesLoaded(true);setReproLoaded(true);setStockLoaded(true);
+      setCapitalLoaded(true);setSessionsLoaded(true);
+    }).catch(e=>{
+      console.error("initial farm load error",e);
+      dataLoaded.current=true;
+      setPigsLoaded(true);setFeedsLoaded(true);setSalesLoaded(true);
+      setLogsLoaded(true);setExpensesLoaded(true);setIncomesLoaded(true);
+      setMessagesLoaded(true);setReproLoaded(true);setStockLoaded(true);
+      setCapitalLoaded(true);setSessionsLoaded(true);
+    });
 
-    // Poll JSONBin every 10 seconds for new workers
+    setSessionLoaded(true);
+
+    // Poll every 8s for changes made by other users (workers)
     const pollUsers=setInterval(async()=>{
       try{
         const fresh=await getOnlineUsers();
-        if(fresh&&fresh.length>0) setUsers([...fresh]);
+        if(fresh&&fresh.length>0){
+          const workers=fresh.filter(u=>u.role!=="admin");
+          setUsers([...INIT_USERS,...workers]);
+        }
       }catch(e){}
-    },10000);
+    },8000);
 
-    // Poll JSONBin every 10 seconds for new farm data (feeds, logs, sales)
     const pollFarm=setInterval(async()=>{
       try{
         const data=await getOnlineFarmData();
-        if(data){
-          if(data.logs&&data.logs.length>0) setLogs([...data.logs]);
-          if(data.feeds&&data.feeds.length>0) setFeeds([...data.feeds]);
-          if(data.sales&&data.sales.length>0) setSales([...data.sales]);
-          if(data.reproductions&&data.reproductions.length>0) setReproductions([...data.reproductions]);
-          if(data.tasks&&data.tasks.length>0) setTasks([...data.tasks]);
-          if(data.vaccinations&&data.vaccinations.length>0) setVaccinations([...data.vaccinations]);
-        }
+        if(data) applyFarmData(data);
       }catch(e){}
-    },10000);
+    },8000);
 
     return()=>{clearInterval(pollUsers);clearInterval(pollFarm);};
   },[]);
 
-  // Persist users online whenever they change (after load)
-  // Removed auto-sync: was overwriting new registrations due to stale state race condition
-  // Persist session online
-  useEffect(()=>{if(sessionLoaded) setOnlineSession(user);},[user,sessionLoaded]);
-
-  // Firestore real-time listeners — all farm data
-  useEffect(()=>{
-    const unsubs=[
-      fsListen("pigs",      setPigs,      setPigsLoaded,     INIT_PIGS),
-      fsListen("feeds",     setFeeds,     setFeedsLoaded,    []),
-      fsListen("sales",     setSales,     setSalesLoaded,    []),
-      fsListen("logs",      setLogs,      setLogsLoaded,     []),
-      fsListen("expenses",  setExpenses,  setExpensesLoaded, []),
-      fsListen("incomes",   setIncomes,   setIncomesLoaded,  []),
-      fsListen("messages",  setMessages,  setMessagesLoaded, []),
-      fsListen("reproductions",setReproductions,setReproLoaded,[]),
-      fsListen("stock",     setStock,     setStockLoaded,    INIT_STOCK),
-      fsListen("tasks",     setTasks,     null,              []),
-      fsListen("vaccinations",setVaccinations,null,          []),
-    ];
-    return()=>unsubs.forEach(u=>u());
-  },[]);
-
-  // Capital Firestore listener
-  useEffect(()=>{
-    const unsub=db.collection("farmiq").doc("capital").onSnapshot(doc=>{
-      if(doc.exists) setCapital(doc.data());
-      else setCapital({initial:0,transactions:[],updatedAt:""});
-      setCapitalLoaded(true);
-    },err=>{console.error("capital listener error",err);setCapitalLoaded(true);});
-    return()=>unsub();
-  },[]);
+  // Save capital to JSONBin whenever it changes (after initial load)
+  const capitalSynced=useRef(false);
   useEffect(()=>{
     if(!capitalLoaded) return;
-    db.collection("farmiq").doc("capital").set({...capital,updatedAt:new Date().toISOString()});
+    if(!capitalSynced.current){capitalSynced.current=true;return;}
+    fsSet("capital",null); // capital saved as top-level key
+    setOnlineFarmData({capital});
   },[capital,capitalLoaded]);
 
-  // Write-guards: only save AFTER the first Firestore snapshot has been received
-  // This prevents the initial load from overwriting Firestore with stale/empty state
-  const pigsSynced=useRef(false);
-  const feedsSynced=useRef(false);
-  const salesSynced=useRef(false);
-  const logsSynced=useRef(false);
-  const expensesSynced=useRef(false);
-  const incomesSynced=useRef(false);
-  const messagesSynced=useRef(false);
-  const reproSynced=useRef(false);
-  const stockSynced=useRef(false);
-  const tasksSynced=useRef(false);
-  const vacSynced=useRef(false);
-
-  useEffect(()=>{
-    if(!pigsLoaded) return;
-    if(!pigsSynced.current){pigsSynced.current=true;return;}
-    fsSet("pigs",pigs);
-  },[pigs,pigsLoaded]);
-  useEffect(()=>{
-    if(!feedsLoaded) return;
-    if(!feedsSynced.current){feedsSynced.current=true;return;}
-    fsSet("feeds",feeds);
-  },[feeds,feedsLoaded]);
-  useEffect(()=>{
-    if(!salesLoaded) return;
-    if(!salesSynced.current){salesSynced.current=true;return;}
-    fsSet("sales",sales);
-  },[sales,salesLoaded]);
-  useEffect(()=>{
-    if(!logsLoaded) return;
-    if(!logsSynced.current){logsSynced.current=true;return;}
-    fsSet("logs",logs);
-  },[logs,logsLoaded]);
-  useEffect(()=>{
-    if(!expensesLoaded) return;
-    if(!expensesSynced.current){expensesSynced.current=true;return;}
-    fsSet("expenses",expenses);
-  },[expenses,expensesLoaded]);
-  useEffect(()=>{
-    if(!incomesLoaded) return;
-    if(!incomesSynced.current){incomesSynced.current=true;return;}
-    fsSet("incomes",incomes);
-  },[incomes,incomesLoaded]);
-  useEffect(()=>{
-    if(!messagesLoaded) return;
-    if(!messagesSynced.current){messagesSynced.current=true;return;}
-    fsSet("messages",messages);
-  },[messages,messagesLoaded]);
-  useEffect(()=>{
-    if(!reproLoaded) return;
-    if(!reproSynced.current){reproSynced.current=true;return;}
-    fsSet("reproductions",reproductions);
-  },[reproductions,reproLoaded]);
-  useEffect(()=>{
-    if(!stockLoaded) return;
-    if(!stockSynced.current){stockSynced.current=true;return;}
-    fsSet("stock",stock);
-  },[stock,stockLoaded]);
-  useEffect(()=>{
-    if(!tasksSynced.current){tasksSynced.current=true;return;}
-    if(tasks.length>0) fsSet("tasks",tasks);
-  },[tasks]);
-  useEffect(()=>{
-    if(!vacSynced.current){vacSynced.current=true;return;}
-    if(vaccinations.length>0) fsSet("vaccinations",vaccinations);
-  },[vaccinations]);
-
-  // Firestore real-time listener for remote work sessions
-  useEffect(()=>{
-    const unsub=db.collection("farmiq").doc("remoteSessions").onSnapshot(doc=>{
-      if(doc.exists&&doc.data().list) setSessions(doc.data().list);
-      else setSessions([]);
-      setSessionsLoaded(true);
-    },err=>{ console.error("Sessions listener error",err); setSessionsLoaded(true); });
-    return()=>unsub();
-  },[]);
-  // Save sessions to Firestore whenever they change
+  // Save sessions to JSONBin whenever they change
+  const sessionsSynced=useRef(false);
   useEffect(()=>{
     if(!sessionsLoaded) return;
-    db.collection("farmiq").doc("remoteSessions").set({list:sessions,updatedAt:new Date().toISOString()});
+    if(!sessionsSynced.current){sessionsSynced.current=true;return;}
+    setOnlineFarmData({sessions});
   },[sessions,sessionsLoaded]);
 
-  // Timeout fallback — if Firebase takes too long, show app anyway
   const [forceShow,setForceShow]=useState(false);
   useEffect(()=>{const t=setTimeout(()=>setForceShow(true),6000);return()=>clearTimeout(t);},[]);
 
