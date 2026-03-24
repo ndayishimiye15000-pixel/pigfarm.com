@@ -1729,19 +1729,20 @@ function App(){
 
   function applyFarmData(data){
     if(!data) return;
-    if(data.pigs&&data.pigs.length>0){setPigs(data.pigs);}
-    if(data.feeds) setFeeds(data.feeds);
-    if(data.sales) setSales(data.sales);
-    if(data.logs)  setLogs(data.logs);
-    if(data.expenses) setExpenses(data.expenses);
-    if(data.incomes)  setIncomes(data.incomes);
-    if(data.messages) setMessages(data.messages);
-    if(data.reproductions) setReproductions(data.reproductions);
-    if(data.stock&&data.stock.length>0) setStock(data.stock);
-    if(data.tasks)        setTasks(data.tasks);
-    if(data.vaccinations) setVaccinations(data.vaccinations);
-    if(data.sessions)     setSessions(data.sessions);
-    if(data.capital)      setCapital(data.capital);
+    // Always apply arrays (even empty) so worker-submitted data is never lost
+    if(Array.isArray(data.pigs)&&data.pigs.length>0) setPigs(data.pigs);
+    if(Array.isArray(data.feeds))    setFeeds(data.feeds);
+    if(Array.isArray(data.sales))    setSales(data.sales);
+    if(Array.isArray(data.logs))     setLogs(data.logs);
+    if(Array.isArray(data.expenses)) setExpenses(data.expenses);
+    if(Array.isArray(data.incomes))  setIncomes(data.incomes);
+    if(Array.isArray(data.messages)) setMessages(data.messages);
+    if(Array.isArray(data.reproductions)) setReproductions(data.reproductions);
+    if(Array.isArray(data.stock)&&data.stock.length>0) setStock(data.stock);
+    if(Array.isArray(data.tasks))        setTasks(data.tasks);
+    if(Array.isArray(data.vaccinations)) setVaccinations(data.vaccinations);
+    if(Array.isArray(data.sessions))   setSessions(data.sessions);
+    if(data.capital&&typeof data.capital==="object") setCapital(data.capital);
   }
 
   useEffect(()=>{
@@ -1779,6 +1780,8 @@ function App(){
     setSessionLoaded(true);
 
     // Poll every 8s for changes made by other users (workers)
+    // Poll every 8s for changes made by other users (workers)
+    // Use server data but merge with any in-flight local cache
     const pollUsers=setInterval(async()=>{
       try{
         const fresh=await getOnlineUsers();
@@ -1791,8 +1794,10 @@ function App(){
 
     const pollFarm=setInterval(async()=>{
       try{
-        const data=await getOnlineFarmData();
-        if(data) applyFarmData(data);
+        const serverData=await _doGetFarm();
+        // Merge server data with local in-memory cache so pending writes win
+        const merged=serverData?{...serverData,...(_latestFarmData||{})}:_latestFarmData;
+        if(merged) applyFarmData(merged);
       }catch(e){}
     },8000);
 
@@ -1804,8 +1809,7 @@ function App(){
   useEffect(()=>{
     if(!capitalLoaded) return;
     if(!capitalSynced.current){capitalSynced.current=true;return;}
-    fsSet("capital",null); // capital saved as top-level key
-    setOnlineFarmData({capital});
+    setOnlineFarmData({capital}); // capital saved as top-level key
   },[capital,capitalLoaded]);
 
   // Save sessions to JSONBin whenever they change
@@ -1856,8 +1860,6 @@ function App(){
     {id:"weekly",l:"📊 Weekly Report"},
     {id:"tasks",l:"✅ Tasks"+(tasks.filter(t=>t.status==="pending").length?" ("+tasks.filter(t=>t.status==="pending").length+")":"")},
     {id:"vaccination",l:"💉 Vaccinations"+(vaccinations.filter(v=>daysDiff(v.nextDue)<=7&&daysDiff(v.nextDue)>=0).length?" 🔔":"")},
-    {id:"tasks",l:"✅ My Tasks"+(tasks.filter(t=>t.workerId===user.id&&t.status==="pending").length?" ("+tasks.filter(t=>t.workerId===user.id&&t.status==="pending").length+")":"")},
-    {id:"vaccination",l:"💉 Vaccinations"},
     {id:"changepassword",l:"🔒 Change Password"}
   ];
   const workerNav=[
@@ -1870,10 +1872,8 @@ function App(){
     {id:"remotework",l:"🖥️ Remote Work"+(sessions.filter(s=>s.workerId===user.id&&s.status==="active").length?" ●":"")},
     {id:"performance",l:"👷 Performance"},
     {id:"weekly",l:"📊 Weekly Report"},
-    {id:"tasks",l:"✅ Tasks"+(tasks.filter(t=>t.status==="pending").length?" ("+tasks.filter(t=>t.status==="pending").length+")":"")},
-    {id:"vaccination",l:"💉 Vaccinations"+(vaccinations.filter(v=>daysDiff(v.nextDue)<=7&&daysDiff(v.nextDue)>=0).length?" 🔔":"")},
     {id:"tasks",l:"✅ My Tasks"+(tasks.filter(t=>t.workerId===user.id&&t.status==="pending").length?" ("+tasks.filter(t=>t.workerId===user.id&&t.status==="pending").length+")":"")},
-    {id:"vaccination",l:"💉 Vaccinations"},
+    {id:"vaccination",l:"💉 Vaccinations"+(vaccinations.filter(v=>daysDiff(v.nextDue)<=7&&daysDiff(v.nextDue)>=0).length?" 🔔":"")},
     {id:"changepassword",l:"🔒 Change Password"}
   ];
   const nav=isAdmin?adminNav:workerNav;
