@@ -1852,19 +1852,73 @@ function App(){
     db.collection("farmiq").doc("capital").set({...capital,updatedAt:new Date().toISOString()});
   },[capital,capitalLoaded]);
 
-  // Save to Firestore whenever data changes (after initial load)
-  useEffect(()=>{if(pigsLoaded)     fsSet("pigs",pigs);},[pigs,pigsLoaded]);
-  useEffect(()=>{if(feedsLoaded)    fsSet("feeds",feeds);},[feeds,feedsLoaded]);
-  useEffect(()=>{if(salesLoaded)    fsSet("sales",sales);},[sales,salesLoaded]);
-  useEffect(()=>{if(logsLoaded)     fsSet("logs",logs);},[logs,logsLoaded]);
-  useEffect(()=>{if(expensesLoaded) fsSet("expenses",expenses);},[expenses,expensesLoaded]);
-  useEffect(()=>{if(incomesLoaded)  fsSet("incomes",incomes);},[incomes,incomesLoaded]);
-  useEffect(()=>{if(messagesLoaded) fsSet("messages",messages);},[messages,messagesLoaded]);
-  useEffect(()=>{if(reproLoaded)    fsSet("reproductions",reproductions);},[reproductions,reproLoaded]);
-  useEffect(()=>{if(stockLoaded)    fsSet("stock",stock);},[stock,stockLoaded]);
-  // Tasks and vaccinations always sync to Firestore
-  useEffect(()=>{if(tasks.length>0) fsSet("tasks",tasks);},[tasks]);
-  useEffect(()=>{if(vaccinations.length>0) fsSet("vaccinations",vaccinations);},[vaccinations]);
+  // Write-guards: only save AFTER the first Firestore snapshot has been received
+  // This prevents the initial load from overwriting Firestore with stale/empty state
+  const pigsSynced=useRef(false);
+  const feedsSynced=useRef(false);
+  const salesSynced=useRef(false);
+  const logsSynced=useRef(false);
+  const expensesSynced=useRef(false);
+  const incomesSynced=useRef(false);
+  const messagesSynced=useRef(false);
+  const reproSynced=useRef(false);
+  const stockSynced=useRef(false);
+  const tasksSynced=useRef(false);
+  const vacSynced=useRef(false);
+
+  useEffect(()=>{
+    if(!pigsLoaded) return;
+    if(!pigsSynced.current){pigsSynced.current=true;return;}
+    fsSet("pigs",pigs);
+  },[pigs,pigsLoaded]);
+  useEffect(()=>{
+    if(!feedsLoaded) return;
+    if(!feedsSynced.current){feedsSynced.current=true;return;}
+    fsSet("feeds",feeds);
+  },[feeds,feedsLoaded]);
+  useEffect(()=>{
+    if(!salesLoaded) return;
+    if(!salesSynced.current){salesSynced.current=true;return;}
+    fsSet("sales",sales);
+  },[sales,salesLoaded]);
+  useEffect(()=>{
+    if(!logsLoaded) return;
+    if(!logsSynced.current){logsSynced.current=true;return;}
+    fsSet("logs",logs);
+  },[logs,logsLoaded]);
+  useEffect(()=>{
+    if(!expensesLoaded) return;
+    if(!expensesSynced.current){expensesSynced.current=true;return;}
+    fsSet("expenses",expenses);
+  },[expenses,expensesLoaded]);
+  useEffect(()=>{
+    if(!incomesLoaded) return;
+    if(!incomesSynced.current){incomesSynced.current=true;return;}
+    fsSet("incomes",incomes);
+  },[incomes,incomesLoaded]);
+  useEffect(()=>{
+    if(!messagesLoaded) return;
+    if(!messagesSynced.current){messagesSynced.current=true;return;}
+    fsSet("messages",messages);
+  },[messages,messagesLoaded]);
+  useEffect(()=>{
+    if(!reproLoaded) return;
+    if(!reproSynced.current){reproSynced.current=true;return;}
+    fsSet("reproductions",reproductions);
+  },[reproductions,reproLoaded]);
+  useEffect(()=>{
+    if(!stockLoaded) return;
+    if(!stockSynced.current){stockSynced.current=true;return;}
+    fsSet("stock",stock);
+  },[stock,stockLoaded]);
+  useEffect(()=>{
+    if(!tasksSynced.current){tasksSynced.current=true;return;}
+    if(tasks.length>0) fsSet("tasks",tasks);
+  },[tasks]);
+  useEffect(()=>{
+    if(!vacSynced.current){vacSynced.current=true;return;}
+    if(vaccinations.length>0) fsSet("vaccinations",vaccinations);
+  },[vaccinations]);
 
   // Firestore real-time listener for remote work sessions
   useEffect(()=>{
