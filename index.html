@@ -575,7 +575,7 @@ function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,log
       method:form.method,status:"pregnant",piglets:0,
       notes:form.notes,loggedDate:toDay()
     };
-    setReproductions(r=>[...r,newRecord]);
+    setReproductions(r=>{const updated=[...r,newRecord];fsSet("reproductions",updated);return updated;});
     try{await jbinAppend("reproductions",newRecord);}catch(e){console.error(e);}
     setSaved(true);
     setTimeout(()=>{setSaved(false);setForm({sowId:"",boarId:"",matingDate:toDay(),notes:"",method:"Natural Service"});},2500);
@@ -585,6 +585,7 @@ function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,log
     const record=reproductions.find(x=>x.id===id);
     const updated=reproductions.map(x=>x.id===id?{...x,status,piglets:piglets||x.piglets,farrowDate:status==="farrowed"?toDay():x.farrowDate}:x);
     setReproductions(updated);
+    fsSet("reproductions",updated);
     // When marked farrowed, record piglet value as capital income
     if(status==="farrowed"&&piglets>0&&setCapital){
       const sow=pigs.find(p=>p.id===record?.sowId);
@@ -916,7 +917,7 @@ function StockManager({stock,setStock,feeds,pigs,capital,setCapital}){
     const qty=parseFloat(form.quantity)||0;
     const cpu=parseFloat(form.costPerUnit)||0;
     const totalCost=qty*cpu;
-    setStock(p=>[...p,{...form,id:uid(),quantity:qty,minLevel:parseFloat(form.minLevel)||0,costPerUnit:cpu,lastUpdated:toDay()}]);
+    setStock(p=>{const updated=[...p,{...form,id:uid(),quantity:qty,minLevel:parseFloat(form.minLevel)||0,costPerUnit:cpu,lastUpdated:toDay()}];fsSet("stock",updated);return updated;});
     if(setCapital&&totalCost>0){
       const cat=form.category==="Medicine"?"Medicine":form.category==="Vaccine"?"Veterinary":form.category==="Feed"?"Feed Purchase":"Equipment";
       capitalTx(capital,setCapital,{type:"expense",category:cat,amount:totalCost,description:`Purchased ${qty} ${form.unit} of ${form.name}`,date:toDay()});
@@ -925,7 +926,7 @@ function StockManager({stock,setStock,feeds,pigs,capital,setCapital}){
   }
 
   function adjust(id,delta){
-    setStock(p=>p.map(s=>s.id===id?{...s,quantity:Math.max(0,s.quantity+delta),lastUpdated:toDay()}:s));
+    setStock(p=>{const updated=p.map(s=>s.id===id?{...s,quantity:Math.max(0,s.quantity+delta),lastUpdated:toDay()}:s);fsSet("stock",updated);return updated;});
   }
 
   function applyAdj(id){
@@ -1274,23 +1275,23 @@ function Ledger({expenses,setExpenses,incomes,setIncomes,feeds,sales,capital,set
   function addExpense(){
     if(!eForm.amount)return;
     const newE={...eForm,id:uid(),amount:parseFloat(eForm.amount),worker:"Admin"};
-    setExpenses(p=>[...p,newE]);
+    setExpenses(p=>{const updated=[...p,newE];fsSet("expenses",updated);return updated;});
     if(setCapital) capitalTx(capital,setCapital,{type:"expense",category:eForm.category,amount:parseFloat(eForm.amount),description:eForm.description,date:eForm.date});
     setESaved(true);setTimeout(()=>{setESaved(false);setEForm({date:toDay(),category:"Feed Purchase",amount:"",description:""});},2000);
   }
   function addIncome(){
     if(!iForm.amount)return;
     const newI={...iForm,id:uid(),amount:parseFloat(iForm.amount),worker:"Admin"};
-    setIncomes(p=>[...p,newI]);
+    setIncomes(p=>{const updated=[...p,newI];fsSet("incomes",updated);return updated;});
     if(setCapital) capitalTx(capital,setCapital,{type:"income",category:iForm.category,amount:parseFloat(iForm.amount),description:iForm.description,date:iForm.date});
     setISaved(true);setTimeout(()=>{setISaved(false);setIForm({date:toDay(),category:"Pig Sale",amount:"",description:""});},2000);
   }
-  function deleteIncome(id){setIncomes(p=>p.filter(i=>i.id!==id));}
-  function deleteExpense(id){setExpenses(p=>p.filter(e=>e.id!==id));}
+  function deleteIncome(id){setIncomes(p=>{const updated=p.filter(i=>i.id!==id);fsSet("incomes",updated);return updated;});}
+  function deleteExpense(id){setExpenses(p=>{const updated=p.filter(e=>e.id!==id);fsSet("expenses",updated);return updated;});}
   function saveEdit(){
     if(!editItem)return;
-    if(editItem.src==="income") setIncomes(p=>p.map(i=>i.id===editItem.id?{...i,...editItem}:i));
-    if(editItem.src==="expense") setExpenses(p=>p.map(e=>e.id===editItem.id?{...e,...editItem}:e));
+    if(editItem.src==="income") setIncomes(p=>{const updated=p.map(i=>i.id===editItem.id?{...i,...editItem}:i);fsSet("incomes",updated);return updated;});
+    if(editItem.src==="expense") setExpenses(p=>{const updated=p.map(e=>e.id===editItem.id?{...e,...editItem}:e);fsSet("expenses",updated);return updated;});
     setEditItem(null);
   }
   return(<div>
@@ -1831,6 +1832,8 @@ function App(){
       fsListen("messages",  setMessages,  setMessagesLoaded, []),
       fsListen("reproductions",setReproductions,setReproLoaded,[]),
       fsListen("stock",     setStock,     setStockLoaded,    INIT_STOCK),
+      fsListen("tasks",     setTasks,     null,              []),
+      fsListen("vaccinations",setVaccinations,null,          []),
     ];
     return()=>unsubs.forEach(u=>u());
   },[]);
@@ -1859,6 +1862,9 @@ function App(){
   useEffect(()=>{if(messagesLoaded) fsSet("messages",messages);},[messages,messagesLoaded]);
   useEffect(()=>{if(reproLoaded)    fsSet("reproductions",reproductions);},[reproductions,reproLoaded]);
   useEffect(()=>{if(stockLoaded)    fsSet("stock",stock);},[stock,stockLoaded]);
+  // Tasks and vaccinations always sync to Firestore
+  useEffect(()=>{if(tasks.length>0) fsSet("tasks",tasks);},[tasks]);
+  useEffect(()=>{if(vaccinations.length>0) fsSet("vaccinations",vaccinations);},[vaccinations]);
 
   // Firestore real-time listener for remote work sessions
   useEffect(()=>{
@@ -2616,14 +2622,17 @@ function TaskManager({user,users,tasks,setTasks}){
   async function addTask(){
     if(!form.title||(!isAdmin?false:!form.workerId)) return;
     const newTask={...form,id:uid(),createdBy:user.name,createdAt:toDay(),status:"pending",workerId:isAdmin?form.workerId:user.id};
-    setTasks(p=>[...p,newTask]);
+    const updated=[...tasks,newTask];
+    setTasks(updated);
+    fsSet("tasks",updated);
     try{await jbinAppend("tasks",newTask);setSaved(true);setTimeout(()=>{setSaved(false);setForm({title:"",desc:"",workerId:"",priority:"Normal",due:toDay()});},2000);}
-    catch(e){alert("❌ Failed to save task.");}
+    catch(e){console.error("task save error",e);}
   }
 
   async function updateStatus(id,status){
     const updated=tasks.map(t=>t.id===id?{...t,status}:t);
     setTasks(updated);
+    fsSet("tasks",updated);
     try{
       const data=await getOnlineFarmData()||{};
       await setOnlineFarmData({...data,tasks:updated});
@@ -2713,7 +2722,7 @@ function VaccinationTracker({pigs,users,vaccinations,setVaccinations,user,capita
     const nextDue=form.nextDue||addDays(form.date,180);
     const cost=parseFloat(form.cost)||0;
     const newVac={...form,id:uid(),nextDue,createdAt:toDay()};
-    setVaccinations(p=>[...p,newVac]);
+    setVaccinations(p=>{const updated=[...p,newVac];fsSet("vaccinations",updated);return updated;});
     if(setCapital&&cost>0){
       const pig=pigs.find(p=>p.id===form.pigId);
       capitalTx(capital,setCapital,{type:"expense",category:"Veterinary",amount:cost,description:`${form.vaccine} for ${pig?pig.tag:"pig"} — by ${form.givenBy}`,date:form.date});
@@ -3599,7 +3608,7 @@ function Pigs({pigs,setPigs,logs,allData,capital,setCapital}){
   function add(){
     if(!form.tag)return;
     const price=parseFloat(form.purchasePrice)||0;
-    setPigs(p=>[...p,{...form,id:uid(),weight:parseFloat(form.weight)||0,status:"active"}]);
+    setPigs(p=>{const updated=[...p,{...form,id:uid(),weight:parseFloat(form.weight)||0,status:"active"}];fsSet("pigs",updated);return updated;});
     if(setCapital&&price>0){
       capitalTx(capital,setCapital,{type:"expense",category:"Pig Purchase",amount:price,description:`Pig ${form.tag} (${form.stage}, ${form.weight||0}kg) purchased`,date:toDay()});
     }
@@ -3637,7 +3646,7 @@ function Pigs({pigs,setPigs,logs,allData,capital,setCapital}){
               <div key={l} style={{background:C.elevated,borderRadius:5,padding:"4px 7px"}}><div style={{color:C.faint,fontSize:9}}>{l}</div><div style={{color:l==="Market Val"?C.accent:C.text,marginTop:1,fontWeight:l==="Market Val"?700:400}}>{v}</div></div>
             ))}
           </div>
-          <button onClick={()=>setPigs(prev=>prev.map(pig=>pig.id===p.id?{...pig,status:pig.status==="active"?"sold":"active"}:pig))} style={{marginTop:8,width:"100%",padding:5,borderRadius:6,border:"1px solid "+C.border,background:"transparent",color:C.faint,fontSize:10,cursor:"pointer"}}>
+          <button onClick={()=>setPigs(prev=>{const updated=prev.map(pig=>pig.id===p.id?{...pig,status:pig.status==="active"?"sold":"active"}:pig);fsSet("pigs",updated);return updated;})} style={{marginTop:8,width:"100%",padding:5,borderRadius:6,border:"1px solid "+C.border,background:"transparent",color:C.faint,fontSize:10,cursor:"pointer"}}>
             {p.status==="active"?"Mark as Sold":"Reactivate"}
           </button>
           {p.status==="active"&&<PigHealthAI pig={p} logs={logs}/>}
@@ -3801,7 +3810,7 @@ function FeedLog({feeds,setFeeds,pigs,logs,sales,expenses,incomes,allData,user})
                 <div><label style={S.lbl}>Date</label><input type="date" value={editForm.date} onChange={e=>setEditForm({...editForm,date:e.target.value})} style={S.inp}/></div>
               </div>
               <div style={{display:"flex",gap:8}}>
-                <button onClick={()=>{setFeeds(p=>p.map(x=>x.id===f.id?{...x,...editForm,kg:parseFloat(editForm.kg)||x.kg,cost:parseFloat(editForm.cost)||x.cost}:x));setEditId(null);setEditForm(null);}} style={{...S.btn(C.accent),flex:1,padding:"7px",fontSize:12}}>✓ Save</button>
+                <button onClick={()=>{setFeeds(p=>{const updated=p.map(x=>x.id===f.id?{...x,...editForm,kg:parseFloat(editForm.kg)||x.kg,cost:parseFloat(editForm.cost)||x.cost}:x);fsSet("feeds",updated);return updated;});setEditId(null);setEditForm(null);}} style={{...S.btn(C.accent),flex:1,padding:"7px",fontSize:12}}>✓ Save</button>
                 <button onClick={()=>{setEditId(null);setEditForm(null);}} style={{...S.btn("#374151"),flex:1,padding:"7px",fontSize:12}}>Cancel</button>
               </div>
             </div>
@@ -3818,7 +3827,7 @@ function FeedLog({feeds,setFeeds,pigs,logs,sales,expenses,incomes,allData,user})
                 <div style={{fontSize:10,color:cpkColor,marginTop:2}}>RWF {fmtNum(cpk)}/kg {cpk>avgCostPerKg*1.2?"⚠️ above avg":cpk>0&&cpk<avgCostPerKg*0.8?"✅ below avg":""}</div>
                 {isAdmin&&<div style={{display:"flex",gap:5,marginTop:5,justifyContent:"flex-end"}}>
                   <button onClick={()=>{setEditId(f.id);setEditForm({kg:String(f.kg),cost:String(f.cost),feedType:f.feedType,date:f.date});}} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid "+C.border,background:"transparent",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>✏️ Edit</button>
-                  <button onClick={()=>{if(window.confirm("Delete this feed record?"))setFeeds(p=>p.filter(x=>x.id!==f.id));}} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>
+                  <button onClick={()=>{if(window.confirm("Delete this feed record?"))setFeeds(p=>{const updated=p.filter(x=>x.id!==f.id);fsSet("feeds",updated);return updated;});}} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>
                 </div>}
               </div>
             </div>
@@ -4220,7 +4229,7 @@ function DEntry({user,pigs,logs,setLogs,capital,setCapital}){
   async function doSave(){
     setConfirm(false);
     const newLog={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay()};
-    setLogs(p=>[...p,newLog]);
+    setLogs(p=>{const updated=[...p,newLog];fsSet("logs",updated);return updated;});
     // Deduct capital for pig deaths if amount entered
     if(setCapital&&form.deaths>0&&parseFloat(form.deathLossAmount)>0){
       capitalTx(capital,setCapital,{type:"expense",category:"Pig Death Loss",amount:parseFloat(form.deathLossAmount),description:`${form.deaths} pig(s) died — loss entered by ${user.name}`,date:toDay()});
@@ -4298,7 +4307,12 @@ function FEntry({user,pigs,feeds,setFeeds,capital,setCapital}){
     }
     const costVal=totalCost;
     const newFeed={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg,cost:costVal,costPerKg};
-    setFeeds(p=>[...p,newFeed]);
+    setFeeds(p=>{
+      const updated=[...p,newFeed];
+      // Sync to Firestore immediately
+      fsSet("feeds",updated);
+      return updated;
+    });
     // Record capital transaction (expense)
     if(setCapital) capitalTx(capital,setCapital,{type:"expense",category:"Feed Purchase",amount:costVal,description:`${kg}kg ${form.feedType}${selPig?" for "+selPig.tag:""}`,date:toDay()});
     try{
@@ -4394,8 +4408,10 @@ function SEntry({user,pigs,setPigs,sales,setSales,capital,setCapital}){
   async function doSave(){
     setConfirm(false);
     const newSale={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:parseFloat(form.total)};
-    setSales(p=>[...p,newSale]);
-    if(form.pigId) setPigs(p=>p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig));
+    // Update sales list and sync to Firestore
+    setSales(p=>{const updated=[...p,newSale];fsSet("sales",updated);return updated;});
+    // Mark pig as sold and sync pigs to Firestore
+    if(form.pigId) setPigs(p=>{const updated=p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig);fsSet("pigs",updated);return updated;});
     // Record capital income
     if(setCapital) capitalTx(capital,setCapital,{type:"income",category:"Pig Sale",amount:newSale.total,description:`${selPig?selPig.tag+", ":""}${form.weight}kg @ RWF ${form.priceKg}/kg to ${form.buyer||"buyer"}`,date:toDay()});
     try{
@@ -4465,8 +4481,8 @@ function BEntry({user,expenses,setExpenses,capital,setCapital}){
       notes:form.notes,
       source:"worker_purchase"
     };
-    // setExpenses triggers Firestore auto-sync via useEffect in App (same pattern as Ledger)
-    setExpenses(p=>[...p,newExp]);
+    // Sync to Firestore immediately so P&L, Dashboard, and Finance all update in real-time
+    setExpenses(p=>{const updated=[...p,newExp];fsSet("expenses",updated);return updated;});
     if(setCapital) capitalTx(capital,setCapital,{
       type:"expense",
       category:form.category,
