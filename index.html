@@ -5227,17 +5227,27 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
   // ── EXPENSES ──
   function saveExpenseEdit(id){
     const amt=parseFloat(editForm.amount)||0;
-    const updated=expenses.map(x=>x.id===id?{...x,...editForm,amount:amt}:x);
+    const orig=expenses.find(x=>x.id===id);
+    const merged={
+      ...orig,
+      ...editForm,
+      amount:amt,
+      // rebuild description from item/supplier if worker purchase
+      description: editForm.description ||
+        (editForm.item
+          ? `${editForm.item}${editForm.quantity?" — "+editForm.quantity+" "+(editForm.unit||""):""}${editForm.supplier?" from "+editForm.supplier:""}`
+          : orig.description||editForm.category)
+    };
+    const updated=expenses.map(x=>x.id===id?merged:x);
     setExpenses(updated);fsSet("expenses",updated);
     const refId="exp_"+id;
-    const orig=expenses.find(x=>x.id===id);
     if((capital.transactions||[]).some(t=>t.refId===refId)){
-      patchCapitalTx(refId,amt,"expense",editForm.category||orig.category,editForm.description||orig.description||editForm.category,editForm.date||orig.date);
+      patchCapitalTx(refId,amt,"expense",editForm.category||orig.category,merged.description,editForm.date||orig.date);
     }else{
-      ensureCapitalTx(refId,"expense",editForm.category||orig.category,amt,editForm.description||orig.description||editForm.category,editForm.date||orig.date);
+      ensureCapitalTx(refId,"expense",editForm.category||orig.category,amt,merged.description,editForm.date||orig.date);
     }
     setEditId(null);setEditForm(null);
-    showToast("✅ Expense updated — capital synced");
+    showToast("✅ Purchase updated — capital synced");
   }
   function deleteExpense(id){
     if(!window.confirm("Delete this expense? Capital will be adjusted."))return;
@@ -5247,7 +5257,7 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
     showToast("🗑️ Expense deleted — capital adjusted");
   }
 
-  const TABS=[{id:"feeds",l:"🌾 Feeds",count:feeds.length},{id:"logs",l:"📋 Daily Logs",count:logs.length},{id:"sales",l:"🏷️ Sales",count:sales.length},{id:"expenses",l:"🛒 Expenses",count:expenses.length}];
+  const TABS=[{id:"feeds",l:"🌾 Feeds",count:feeds.length},{id:"logs",l:"📋 Daily Logs",count:logs.length},{id:"sales",l:"🏷️ Sales",count:sales.length},{id:"expenses",l:"🛒 Purchases",count:expenses.length}];
   const workerName=(id)=>{const u=users.find(x=>x.id===id);return u?u.name:"—";};
   const q=search.toLowerCase();
 
@@ -5439,45 +5449,67 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
       })}
     </div>}
 
-    {/* ── EXPENSES TAB ── */}
+    {/* ── EXPENSES / PURCHASES TAB ── */}
     {tab==="expenses"&&<div>
-      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:10}}>🛒 All Expense Records ({expenses.length})</div>
-      {expenses.length===0&&<div style={{...S.card,color:C.faint,fontSize:13}}>No expense records yet.</div>}
-      {expenses.filter(e=>!q||(e.worker||"").toLowerCase().includes(q)||(e.category||"").toLowerCase().includes(q)||(e.description||"").toLowerCase().includes(q)||(e.date||"").includes(q)).slice().reverse().map(e=>(
-        <div key={e.id} style={{...S.card,marginBottom:10}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:6}}>🛒 All Purchases & Expenses ({expenses.length})</div>
+      <div style={{fontSize:12,color:C.muted,marginBottom:12}}>Includes all worker purchases and admin-recorded expenses</div>
+      {expenses.length===0&&<div style={{...S.card,color:C.faint,fontSize:13}}>No expense/purchase records yet.</div>}
+      {expenses.filter(e=>!q||(e.worker||"").toLowerCase().includes(q)||(e.category||"").toLowerCase().includes(q)||(e.description||"").toLowerCase().includes(q)||(e.item||"").toLowerCase().includes(q)||(e.supplier||"").toLowerCase().includes(q)||(e.date||"").includes(q)).slice().reverse().map(e=>(
+        <div key={e.id} style={{...S.card,marginBottom:10,borderLeft:"3px solid "+C.red}}>
           {editId===e.id&&editForm?(
             <div>
-              <div style={{fontSize:12,fontWeight:700,color:C.red,marginBottom:10}}>✏️ Editing Expense</div>
+              <div style={{fontSize:12,fontWeight:700,color:C.red,marginBottom:10}}>✏️ Editing Purchase / Expense</div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
                 <div><label style={S.lbl}>Category</label>
-                  <select value={editForm.category} onChange={ex=>setEditForm({...editForm,category:ex.target.value})} style={S.inp}>
+                  <select value={editForm.category||""} onChange={ex=>setEditForm({...editForm,category:ex.target.value})} style={S.inp}>
                     {["Feed Purchase","Medicine","Veterinary","Equipment","Transport","Labour","Utilities","Maintenance","Pig Purchase","Other"].map(c=><option key={c}>{c}</option>)}
                   </select>
                 </div>
-                <div><label style={S.lbl}>Date</label><input type="date" value={editForm.date} onChange={ex=>setEditForm({...editForm,date:ex.target.value})} style={S.inp}/></div>
-                <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Amount (RWF)</label><input type="number" min="0" value={editForm.amount} onChange={ex=>setEditForm({...editForm,amount:ex.target.value})} style={S.inp}/></div>
-                <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Description</label><input value={editForm.description||""} onChange={ex=>setEditForm({...editForm,description:ex.target.value})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Date</label><input type="date" value={editForm.date||""} onChange={ex=>setEditForm({...editForm,date:ex.target.value})} style={S.inp}/></div>
+                <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Item / What was bought</label><input placeholder="e.g. Maize bran, Ivermectin…" value={editForm.item||""} onChange={ex=>setEditForm({...editForm,item:ex.target.value})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Quantity</label><input type="number" min="0" placeholder="e.g. 50" value={editForm.quantity||""} onChange={ex=>{const q2=ex.target.value;const up=parseFloat(editForm.unitPrice)||0;setEditForm({...editForm,quantity:q2,amount:up>0&&parseFloat(q2)>0?String(Math.round(parseFloat(q2)*up)):editForm.amount});}} style={S.inp}/></div>
+                <div><label style={S.lbl}>Unit</label>
+                  <select value={editForm.unit||"kg"} onChange={ex=>setEditForm({...editForm,unit:ex.target.value})} style={S.inp}>
+                    {["kg","litres","doses","pcs","bags","boxes","heads"].map(u=><option key={u}>{u}</option>)}
+                  </select>
+                </div>
+                <div><label style={S.lbl}>Unit Price (RWF)</label><input type="number" min="0" placeholder="per unit" value={editForm.unitPrice||""} onChange={ex=>{const up=ex.target.value;const q2=parseFloat(editForm.quantity)||0;setEditForm({...editForm,unitPrice:up,amount:q2>0&&parseFloat(up)>0?String(Math.round(q2*parseFloat(up))):editForm.amount});}} style={S.inp}/></div>
+                <div><label style={S.lbl}>Total Amount (RWF) *</label><input type="number" min="0" value={editForm.amount||""} onChange={ex=>setEditForm({...editForm,amount:ex.target.value})} style={S.inp}/></div>
+                <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Supplier / Where bought</label><input placeholder="e.g. Kimironko Market…" value={editForm.supplier||""} onChange={ex=>setEditForm({...editForm,supplier:ex.target.value})} style={S.inp}/></div>
+                <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Description / Notes</label><input value={editForm.description||""} onChange={ex=>setEditForm({...editForm,description:ex.target.value})} style={S.inp}/></div>
               </div>
-              {editForm.amount&&<div style={{padding:"8px 12px",background:"rgba(239,68,68,.06)",borderRadius:7,marginBottom:10,fontSize:12,color:C.red}}>
-                New expense: <strong>{fmtRWF(parseFloat(editForm.amount)||0)}</strong> → will update capital
+              {editForm.amount&&parseFloat(editForm.amount)>0&&<div style={{padding:"8px 12px",background:"rgba(239,68,68,.06)",border:"1px solid rgba(239,68,68,.2)",borderRadius:7,marginBottom:10,fontSize:12,color:C.red,display:"flex",justifyContent:"space-between"}}>
+                <span>New total expense: <strong>{fmtRWF(parseFloat(editForm.amount)||0)}</strong></span>
+                <span style={{color:C.faint}}>{editForm.category} → capital updated</span>
               </div>}
               <div style={{display:"flex",gap:8}}>
-                <button onClick={()=>saveExpenseEdit(e.id)} style={{...S.btn(C.accent),flex:1,padding:8,fontSize:12}}>✓ Save & Sync Capital</button>
-                <button onClick={()=>{setEditId(null);setEditForm(null);}} style={{...S.btn("#374151"),padding:8,fontSize:12}}>Cancel</button>
+                <button onClick={()=>saveExpenseEdit(e.id)} style={{...S.btn(C.accent),flex:1,padding:9,fontSize:12}}>✓ Save & Sync Capital</button>
+                <button onClick={()=>{setEditId(null);setEditForm(null);}} style={{...S.btn("#374151"),padding:9,fontSize:12}}>Cancel</button>
               </div>
             </div>
           ):(
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
-              <div style={{flex:1}}>
-                <div style={{fontWeight:700,fontSize:13,color:C.text}}>🛒 {e.category}</div>
-                <div style={{fontSize:11,color:C.faint,marginTop:2}}>👷 {e.worker||"Admin"} · {e.date}</div>
-                {e.description&&<div style={{fontSize:11,color:C.muted,marginTop:2}}>{e.description}</div>}
-              </div>
-              <div style={{textAlign:"right"}}>
-                <div style={{fontWeight:700,color:C.red,fontSize:14}}>{fmtRWF(e.amount)}</div>
-                <div style={{display:"flex",gap:5,marginTop:5,justifyContent:"flex-end"}}>
-                  <button onClick={()=>{setEditId(e.id);setEditForm({category:e.category,date:e.date,amount:String(e.amount||""),description:e.description||""});}} style={{fontSize:11,padding:"3px 10px",borderRadius:6,border:"1px solid "+C.border,background:"transparent",color:C.text,cursor:"pointer",fontFamily:"inherit"}}>✏️ Edit</button>
-                  <button onClick={()=>deleteExpense(e.id)} style={{fontSize:11,padding:"3px 10px",borderRadius:6,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️ Delete</button>
+            <div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8,marginBottom:6}}>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
+                    <span style={{fontWeight:700,fontSize:13,color:C.text}}>🛒 {e.item||e.category}</span>
+                    <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:"rgba(239,68,68,.08)",color:C.red,fontWeight:600}}>{e.category}</span>
+                    {e.source==="worker_purchase"&&<span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:"rgba(37,99,235,.08)",color:C.blue,fontWeight:600}}>👷 Worker</span>}
+                  </div>
+                  <div style={{fontSize:11,color:C.faint,marginTop:3}}>
+                    👤 {e.worker||"Admin"} · 📅 {e.date}
+                    {e.quantity&&<span> · {e.quantity} {e.unit||""}{e.unitPrice?" @ RWF"+fmtNum(e.unitPrice)+"/"+e.unit:""}</span>}
+                    {e.supplier&&<span> · 📍 {e.supplier}</span>}
+                  </div>
+                  {e.description&&e.description!==e.item&&<div style={{fontSize:11,color:C.muted,marginTop:2,fontStyle:"italic"}}>{e.description}</div>}
+                  {e.notes&&<div style={{fontSize:11,color:C.muted,marginTop:2,fontStyle:"italic"}}>📝 {e.notes}</div>}
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontWeight:800,color:C.red,fontSize:15}}>{fmtRWF(e.amount)}</div>
+                  <div style={{display:"flex",gap:5,marginTop:6,justifyContent:"flex-end"}}>
+                    <button onClick={()=>{setEditId(e.id);setEditForm({category:e.category||"Other",date:e.date||toDay(),item:e.item||"",quantity:e.quantity||"",unit:e.unit||"kg",unitPrice:e.unitPrice||"",amount:String(e.amount||""),supplier:e.supplier||"",description:e.description||"",notes:e.notes||""});}} style={{padding:"4px 12px",borderRadius:7,border:"1px solid "+C.border,background:C.elevated,color:C.text,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✏️ Edit</button>
+                    <button onClick={()=>deleteExpense(e.id)} style={{padding:"4px 12px",borderRadius:7,border:"1px solid rgba(239,68,68,.35)",background:"rgba(239,68,68,.06)",color:C.red,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🗑️ Delete</button>
+                  </div>
                 </div>
               </div>
             </div>
