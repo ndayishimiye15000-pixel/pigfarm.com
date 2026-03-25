@@ -142,6 +142,8 @@ const INIT_DATA={
   submissions:[],
   announcements:[],
   reportCards:[],
+  subjectWeights:[],
+  caRecords:[],
 };
 
 /* ═══════════════════════════ QUESTION TYPE HELPERS ═══════════════════════════ */
@@ -470,6 +472,7 @@ function TeacherDash({user,data,setData,users,toast}){
     ["exams","📝 My Exams"],
     ["create","➕ Create"],
     ["grading","📋 Grading"+(pendingSubs.length>0?` (${pendingSubs.length})`:"")],
+    ["ca","📊 CA & Weights"],
     ["resources","📚 Resources"],
     ["results","📈 Results"],
   ];
@@ -511,8 +514,168 @@ function TeacherDash({user,data,setData,users,toast}){
       {tab==="exams"&&<ExamList exams={myExams} data={data} setData={setData} toast={toast} isTeacher/>}
       {tab==="create"&&<CreateExam user={user} data={data} setData={setData} toast={toast} onDone={()=>setTab("exams")}/>}
       {tab==="grading"&&<GradingPanel user={user} data={data} setData={setData} myExams={myExams} toast={toast}/>}
+      {tab==="ca"&&<CAWeightsPanel user={user} data={data} setData={setData} toast={toast}/>}
       {tab==="resources"&&<ResourcesPanel user={user} data={data} setData={setData} toast={toast} isTeacher/>}
       {tab==="results"&&<ResultsView data={data} users={users} myExams={myExams}/>}
+    </div>
+  );
+}
+
+/* ═══════════════════════════ CA & WEIGHTS PANEL ═══════════════════════════ */
+function CAWeightsPanel({user,data,setData,toast}){
+  // Each teacher can set weight for their subject(s) and enter CA scores for students
+  const mySubjects=(user.subjects&&user.subjects.length>0)?user.subjects:user.subject?[{subject:user.subject,class:""}]:[];
+  const[selSubject,setSelSubject]=useState(mySubjects[0]?.subject||"");
+  const[selClass,setSelClass]=useState(mySubjects[0]?.class||"");
+  const[caWeight,setCaWeight]=useState(40);
+  const[examWeight,setExamWeight]=useState(60);
+  const[savingW,setSavingW]=useState(false);
+  const[caInputs,setCaInputs]=useState({});
+  const[savingCA,setSavingCA]=useState(false);
+
+  // Load existing weight for selected subject
+  const subjectWeights=data.subjectWeights||[];
+  const caRecords=data.caRecords||[];
+
+  useEffect(()=>{
+    if(!selSubject)return;
+    const sw=subjectWeights.find(w=>w.subject===selSubject&&w.teacherId===user.id);
+    if(sw){setCaWeight(sw.caWeight);setExamWeight(sw.examWeight);}
+    else{setCaWeight(40);setExamWeight(60);}
+    // Load existing CA scores for this subject/class
+    const existing={};
+    caRecords.filter(r=>r.subject===selSubject&&r.teacherId===user.id&&(!selClass||r.class===selClass)).forEach(r=>{
+      existing[r.studentId]=r.caScore;
+    });
+    setCaInputs(existing);
+  },[selSubject,selClass]);
+
+  const filteredStudents=(data.students||[]).filter(s=>!selClass||s.class===selClass);
+
+  async function saveWeight(){
+    const total=parseInt(caWeight)+parseInt(examWeight);
+    if(total!==100){toast("CA% + Exam% must equal 100","err");return;}
+    setSavingW(true);
+    const sw={subject:selSubject,teacherId:user.id,teacherName:user.name,caWeight:parseInt(caWeight),examWeight:parseInt(examWeight),updatedAt:now()};
+    const updated=subjectWeights.filter(w=>!(w.subject===selSubject&&w.teacherId===user.id));
+    updated.push(sw);
+    setData(d=>({...d,subjectWeights:updated}));
+    await dsSet("subjectWeights",updated);
+    setSavingW(false);
+    toast("Subject weight saved ✓");
+  }
+
+  async function saveCAScores(){
+    setSavingCA(true);
+    const updated=caRecords.filter(r=>!(r.subject===selSubject&&r.teacherId===user.id&&(!selClass||r.class===selClass)));
+    Object.entries(caInputs).forEach(([studentId,score])=>{
+      if(score===undefined||score==="")return;
+      const student=filteredStudents.find(s=>s.id===studentId);
+      if(!student)return;
+      updated.push({id:uid(),subject:selSubject,teacherId:user.id,teacherName:user.name,
+        studentId,studentName:student.name,class:student.class||selClass,
+        caScore:Math.min(100,Math.max(0,parseFloat(score)||0)),updatedAt:now()});
+    });
+    setData(d=>({...d,caRecords:updated}));
+    await dsSet("caRecords",updated);
+    setSavingCA(false);
+    toast("CA scores saved ✓");
+  }
+
+  const existingWeight=subjectWeights.find(w=>w.subject===selSubject&&w.teacherId===user.id);
+
+  return(
+    <div>
+      <div style={{...S.card,background:"linear-gradient(135deg,"+C.teal+"15,"+C.teal+"05)",border:"1.5px solid "+C.teal+"44"}}>
+        <div style={{fontWeight:800,fontSize:14,color:C.teal,marginBottom:2}}>📊 Continuous Assessment & Subject Weights</div>
+        <div style={{fontSize:12,color:C.muted}}>Set how much CA and Exam each count for your subject. Enter CA scores per student. These feed into the report card.</div>
+      </div>
+
+      {/* Subject selector */}
+      <div style={S.card}>
+        <div style={{fontWeight:700,marginBottom:10}}>Select Subject</div>
+        <div style={S.g2}>
+          <div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Subject</div>
+            <select value={selSubject} onChange={e=>setSelSubject(e.target.value)}>
+              {mySubjects.map(s=><option key={s.subject} value={s.subject}>{s.subject}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Class (optional)</div>
+            <select value={selClass} onChange={e=>setSelClass(e.target.value)}>
+              <option value="">All classes</option>
+              {["S1","S2","S3","S4","S5","S6"].map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Weight configuration */}
+      <div style={S.card}>
+        <div style={{fontWeight:700,marginBottom:4}}>⚖️ Score Weighting for <span style={{color:C.teal}}>{selSubject}</span></div>
+        <div style={{fontSize:12,color:C.muted,marginBottom:12}}>Set how CA and Exam scores are combined. Must total 100%.</div>
+        <div style={S.g2}>
+          <div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:4}}>CA Weight (%)</div>
+            <input type="number" min={0} max={100} value={caWeight}
+              onChange={e=>{const v=parseInt(e.target.value)||0;setCaWeight(v);setExamWeight(100-v);}}/>
+          </div>
+          <div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Exam Weight (%)</div>
+            <input type="number" min={0} max={100} value={examWeight}
+              onChange={e=>{const v=parseInt(e.target.value)||0;setExamWeight(v);setCaWeight(100-v);}}/>
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+          <div style={{flex:1,height:10,background:C.border,borderRadius:6,overflow:"hidden"}}>
+            <div style={{height:"100%",width:caWeight+"%",background:C.teal,borderRadius:6,transition:"width .3s"}}/>
+          </div>
+          <span style={{fontSize:12,fontWeight:700,color:parseInt(caWeight)+parseInt(examWeight)===100?C.green:C.red}}>
+            {parseInt(caWeight)+parseInt(examWeight)===100?"✓ 100%":"⚠️ "+(parseInt(caWeight)+parseInt(examWeight))+"%"}
+          </span>
+        </div>
+        <div style={{display:"flex",gap:10,fontSize:11,color:C.muted,marginBottom:12}}>
+          <span style={{...S.badge(C.teal,C.tealBg)}}>{caWeight}% CA</span>
+          <span>+</span>
+          <span style={{...S.badge(C.blue,C.blueBg)}}>{examWeight}% Exam</span>
+          <span>= Final Score /100</span>
+        </div>
+        {existingWeight&&<div style={{fontSize:11,color:C.green,marginBottom:8}}>✓ Currently saved: {existingWeight.caWeight}% CA + {existingWeight.examWeight}% Exam</div>}
+        <button style={{...S.btn(C.teal),width:"100%"}} onClick={saveWeight} disabled={savingW}>
+          {savingW?<><Spinner/> Saving…</>:"💾 Save Weight for "+selSubject}
+        </button>
+      </div>
+
+      {/* CA score entry */}
+      <div style={S.card}>
+        <div style={{fontWeight:700,marginBottom:4}}>📝 Enter CA Scores — <span style={{color:C.teal}}>{selSubject}</span></div>
+        <div style={{fontSize:12,color:C.muted,marginBottom:12}}>Enter each student's Continuous Assessment score (out of 100). This will be combined with their exam score using the weight above.</div>
+        {filteredStudents.length===0&&<div style={{color:C.faint,fontSize:13,textAlign:"center",padding:20}}>No students found{selClass?" in "+selClass:""}.</div>}
+        {filteredStudents.map(s=>(
+          <div key={s.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid "+C.border}}>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:600,fontSize:13}}>{s.name}</div>
+              <div style={{fontSize:11,color:C.muted}}>{s.class||"—"} · {s.regNo||"—"}</div>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <input type="number" min={0} max={100}
+                value={caInputs[s.id]??""} placeholder="0–100"
+                onChange={e=>setCaInputs(p=>({...p,[s.id]:e.target.value}))}
+                style={{width:80,textAlign:"center"}}/>
+              <span style={{fontSize:11,color:C.muted}}>/ 100</span>
+            </div>
+            {caInputs[s.id]!==undefined&&caInputs[s.id]!==""&&(
+              <span style={{...S.badge(C.teal,C.tealBg),fontSize:10}}>✓</span>
+            )}
+          </div>
+        ))}
+        {filteredStudents.length>0&&(
+          <button style={{...S.btn(C.green),width:"100%",marginTop:12}} onClick={saveCAScores} disabled={savingCA}>
+            {savingCA?<><Spinner/> Saving…</>:"💾 Save All CA Scores"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -1730,16 +1893,50 @@ function ReportCardAdmin({data,setData,users,toast}){
     const student=users.find(u=>u.id===selStudent||u.username===selStudent);
     if(!student){toast("Student not found","err");return;}
     const mySubs=(data.submissions||[]).filter(s=>(s.studentId===student.id||s.studentUsername===student.username)&&s.status==="graded");
+    const subjectWeights=data.subjectWeights||[];
+    const caRecords=data.caRecords||[];
+
+    // Build subject map — best exam score per subject
     const subjectMap={};
     mySubs.forEach(sub=>{
       const exam=(data.exams||[]).find(e=>e.id===sub.examId);
       if(!exam)return;
       const subj=exam.subject||"General";
-      if(!subjectMap[subj]||sub.pct>subjectMap[subj].pct){
-        subjectMap[subj]={examTitle:exam.title,pct:sub.pct,earned:sub.earned,total:sub.total,grade:getGrade(sub.pct||0)};
+      if(!subjectMap[subj]||sub.pct>subjectMap[subj].examPct){
+        subjectMap[subj]={examTitle:exam.title,examPct:sub.pct,earned:sub.earned,total:sub.total};
       }
     });
-    const subjects=Object.entries(subjectMap).map(([subj,v])=>({subject:subj,...v}));
+
+    const subjects=Object.entries(subjectMap).map(([subj,v])=>{
+      // Get weight for this subject
+      const sw=subjectWeights.find(w=>w.subject===subj);
+      const caW=sw?sw.caWeight:40;
+      const exW=sw?sw.examWeight:60;
+      // Get CA score for this student & subject
+      const caRec=caRecords.find(r=>r.subject===subj&&(r.studentId===student.id||r.studentName===student.name));
+      const caPct=caRec?parseFloat(caRec.caScore):null;
+      // Weighted final score
+      let finalPct;
+      if(caPct!==null){
+        finalPct=Math.round((caPct*caW/100)+(v.examPct*exW/100));
+      } else {
+        finalPct=v.examPct; // no CA recorded — use exam only
+      }
+      return{
+        subject:subj,
+        examTitle:v.examTitle,
+        earned:v.earned,total:v.total,
+        examPct:v.examPct,
+        caPct,
+        caWeight:caW,
+        examWeight:exW,
+        pct:finalPct,
+        grade:getGrade(finalPct),
+        hasCa:caPct!==null,
+      };
+    });
+
+    // Overall weighted average — each subject equally
     const avg=subjects.length>0?Math.round(subjects.reduce((s,x)=>s+(x.pct||0),0)/subjects.length):0;
     const overall=getGrade(avg);
     const card={
@@ -1856,29 +2053,46 @@ function ReportCardPreview({card,onBack}){
             <div style={{color:C.faint,fontSize:12,textAlign:"center",padding:20}}>No graded exams found for this student.</div>
           )}
           {card.subjects.length>0&&(
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
               <thead>
                 <tr style={{background:C.elevated}}>
-                  {["Subject","Marks","Score","Grade","Remarks"].map(h=>(
-                    <th key={h} style={{padding:"7px 9px",textAlign:"left",color:C.muted,fontWeight:700,borderBottom:"2px solid "+C.border,fontSize:10,textTransform:"uppercase"}}>{h}</th>
+                  {["Subject","CA Score","Exam Score","Weighting","Final /100","Grade"].map(h=>(
+                    <th key={h} style={{padding:"7px 7px",textAlign:"left",color:C.muted,fontWeight:700,borderBottom:"2px solid "+C.border,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {card.subjects.map((s,i)=>(
                   <tr key={i} style={{background:i%2===0?"transparent":C.elevated}}>
-                    <td style={{padding:"8px 9px",fontWeight:600}}>{s.subject}</td>
-                    <td style={{padding:"8px 9px",color:C.muted}}>{s.earned}/{s.total}</td>
-                    <td style={{padding:"8px 9px"}}>
-                      <div style={{display:"flex",alignItems:"center",gap:6}}>
-                        <span style={{fontWeight:700,color:s.grade.c}}>{s.pct}%</span>
-                        <div style={{flex:1,height:4,background:C.border,borderRadius:4,minWidth:36}}>
+                    <td style={{padding:"8px 7px",fontWeight:700,fontSize:12}}>{s.subject}</td>
+                    <td style={{padding:"8px 7px"}}>
+                      {s.hasCa!==false&&s.caPct!==null&&s.caPct!==undefined
+                        ?<span style={{fontWeight:700,color:C.teal}}>{s.caPct}%</span>
+                        :<span style={{color:C.faint,fontSize:10,fontStyle:"italic"}}>Not entered</span>}
+                    </td>
+                    <td style={{padding:"8px 7px"}}>
+                      <span style={{fontWeight:700,color:C.blue}}>{s.examPct!==undefined?s.examPct:s.pct}%</span>
+                      <div style={{fontSize:9,color:C.faint}}>{s.earned}/{s.total} mk</div>
+                    </td>
+                    <td style={{padding:"8px 7px"}}>
+                      <div style={{fontSize:10}}>
+                        <span style={{color:C.teal}}>{s.caWeight||40}% CA</span>
+                        <span style={{color:C.muted}}> + </span>
+                        <span style={{color:C.blue}}>{s.examWeight||60}% Ex</span>
+                      </div>
+                    </td>
+                    <td style={{padding:"8px 7px"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:5}}>
+                        <span style={{fontWeight:800,color:s.grade.c,fontSize:13}}>{s.pct}</span>
+                        <div style={{flex:1,height:5,background:C.border,borderRadius:4,minWidth:30}}>
                           <div style={{height:"100%",width:s.pct+"%",background:s.grade.c,borderRadius:4}}/>
                         </div>
                       </div>
                     </td>
-                    <td style={{padding:"8px 9px"}}><span style={{...S.badge(s.grade.c,s.grade.c+"22")}}>{s.grade.g}</span></td>
-                    <td style={{padding:"8px 9px",color:C.muted}}>{s.grade.l}</td>
+                    <td style={{padding:"8px 7px"}}>
+                      <span style={{...S.badge(s.grade.c,s.grade.c+"22"),fontWeight:800}}>{s.grade.g}</span>
+                      <div style={{fontSize:9,color:C.muted,marginTop:1}}>{s.grade.l}</div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -1892,13 +2106,17 @@ function ReportCardPreview({card,onBack}){
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <div>
               <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:".6px",marginBottom:2}}>Overall Performance</div>
-              <div style={{fontSize:28,fontWeight:900,color:gr.c}}>{card.avg}%</div>
+              <div style={{fontSize:28,fontWeight:900,color:gr.c}}>{card.avg} / 100</div>
               <div style={{fontSize:13,color:C.muted}}>{gr.g} — {gr.l}</div>
+              <div style={{fontSize:10,color:C.faint,marginTop:4}}>Average of all subject finals (CA + Exam weighted)</div>
             </div>
             <div style={{fontSize:48}}>{gr.g==="A"?"🏆":gr.g==="B"?"🥈":gr.g==="C"?"👍":gr.g==="D"?"📚":"⚠️"}</div>
           </div>
           <div style={{marginTop:10,height:8,background:C.border,borderRadius:6}}>
             <div style={{height:"100%",width:card.avg+"%",background:gr.c,borderRadius:6,transition:"width .5s"}}/>
+          </div>
+          <div style={{marginTop:8,display:"flex",gap:8,fontSize:10,color:C.muted,flexWrap:"wrap"}}>
+            <span>📊 Final = (CA × CA%) + (Exam × Exam%) per subject</span>
           </div>
         </div>
 
@@ -2072,6 +2290,8 @@ function App(){
             submissions:d.submissions||[],
             announcements:d.announcements||[],
             reportCards:d.reportCards||[],
+            subjectWeights:d.subjectWeights||[],
+            caRecords:d.caRecords||[],
           });
           _latestData=d;
         }
