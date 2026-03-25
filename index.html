@@ -123,23 +123,25 @@ const S={
 /* ═══════════════════════════ SEED DATA ═══════════════════════════ */
 const INIT_USERS=[
   {id:"u1",name:"System Admin",username:"admin",password:"admin123",role:"admin",approved:true,createdAt:toDay()},
-  {id:"u2",name:"Mrs. Uwimana",username:"teacher1",password:"teach123",role:"teacher",approved:true,subject:"Mathematics",createdAt:toDay()},
+  {id:"u2",name:"Mrs. Uwimana",username:"teacher1",password:"teach123",role:"teacher",approved:true,subject:"Mathematics",subjects:[{subject:"Mathematics",class:"S3"},{subject:"Mathematics",class:"S4"}],createdAt:toDay()},
   {id:"u3",name:"Jean Pierre",username:"student1",password:"pass123",role:"student",approved:true,class:"S3",regNo:"2024/001",createdAt:toDay()},
 ];
 const INIT_DATA={
+  schoolName:"EduIQ School",
   students:[
     {id:"s1",name:"Jean Pierre",username:"student1",class:"S3",regNo:"2024/001",approved:true},
     {id:"s2",name:"Amina Uwase",username:"student2",class:"S3",regNo:"2024/002",approved:true},
     {id:"s3",name:"Eric Mugisha",username:"student3",class:"S4",regNo:"2024/003",approved:true},
   ],
   teachers:[
-    {id:"t1",name:"Mrs. Uwimana",username:"teacher1",subject:"Mathematics"},
-    {id:"t2",name:"Mr. Habimana",username:"teacher2",subject:"Physics"},
+    {id:"t1",name:"Mrs. Uwimana",username:"teacher1",subject:"Mathematics",subjects:[{subject:"Mathematics",class:"S3"},{subject:"Mathematics",class:"S4"}]},
+    {id:"t2",name:"Mr. Habimana",username:"teacher2",subject:"Physics",subjects:[{subject:"Physics",class:"S3"},{subject:"Physics",class:"S5"}]},
   ],
   resources:[],
   exams:[],
   submissions:[],
   announcements:[],
+  reportCards:[],
 };
 
 /* ═══════════════════════════ QUESTION TYPE HELPERS ═══════════════════════════ */
@@ -213,7 +215,7 @@ function LoginPage({onLogin,users,setUsers}){
   const[err,setErr]=useState("");
   const[loading,setLoading]=useState(false);
   const[reg,setReg]=useState(false);
-  const[regForm,setRegForm]=useState({name:"",username:"",password:"",role:"student",class:"",subject:""});
+  const[regForm,setRegForm]=useState({name:"",username:"",password:"",role:"student",class:"",subject:"",subjects:[{subject:"",class:""}]});
 
   function doLogin(){
     setLoading(true);setErr("");
@@ -230,7 +232,7 @@ function LoginPage({onLogin,users,setUsers}){
     const newUser={id:uid(),name:regForm.name,username:regForm.username,password:regForm.password,
       role:regForm.role,approved:false,
       ...(regForm.role==="student"?{class:regForm.class,regNo:"REG/"+uid().slice(0,6).toUpperCase()}:{}),
-      ...(regForm.role==="teacher"?{subject:regForm.subject}:{}),
+      ...(regForm.role==="teacher"?{subject:regForm.subjects[0]?.subject||regForm.subject,subjects:regForm.subjects.filter(s=>s.subject)}:{}),
       createdAt:toDay()};
     const updated=[...(users||[]),newUser];
     await setOnlineUsers(updated);
@@ -302,8 +304,18 @@ function LoginPage({onLogin,users,setUsers}){
               )}
               {regForm.role==="teacher"&&(
                 <div style={{marginBottom:10}}>
-                  <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Subject</div>
-                  <input value={regForm.subject} onChange={e=>setRegForm({...regForm,subject:e.target.value})} placeholder="e.g. Mathematics"/>
+                  <div style={{fontSize:11,color:C.muted,marginBottom:6}}>Subjects &amp; Classes</div>
+                  {regForm.subjects.map((s,i)=>(
+                    <div key={i} style={{display:"flex",gap:6,marginBottom:6,alignItems:"center"}}>
+                      <input value={s.subject} onChange={e=>{const n=[...regForm.subjects];n[i]={...n[i],subject:e.target.value};setRegForm({...regForm,subjects:n});}} placeholder="Subject e.g. Math"/>
+                      <select value={s.class} onChange={e=>{const n=[...regForm.subjects];n[i]={...n[i],class:e.target.value};setRegForm({...regForm,subjects:n});}}>
+                        <option value="">All</option>
+                        {["S1","S2","S3","S4","S5","S6"].map(c=><option key={c} value={c}>{c}</option>)}
+                      </select>
+                      {regForm.subjects.length>1&&<button onClick={()=>setRegForm({...regForm,subjects:regForm.subjects.filter((_,j)=>j!==i)})} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:16,padding:0}}>✕</button>}
+                    </div>
+                  ))}
+                  <button onClick={()=>setRegForm({...regForm,subjects:[...regForm.subjects,{subject:"",class:""}]})} style={{...S.btn(C.elevated,C.accent),fontSize:11,border:"1px solid "+C.borderAccent}}>+ Add Subject</button>
                 </div>
               )}
               {err&&<div style={{color:err.includes("submitted")?C.green:C.red,fontSize:12,marginBottom:12,padding:"8px 12px",background:err.includes("submitted")?C.greenBg:C.redBg,borderRadius:7}}>{err}</div>}
@@ -342,7 +354,7 @@ function AdminDash({user,data,setData,users,setUsers,toast,onLogout}){
     toast("Announcement posted ✓");
   }
 
-  const tabs=[["overview","📊 Overview"],["users","👥 Users"],["pending","🕐 Pending"+(pending.length>0?` (${pending.length})`:"")],["announce","📢 Announce"],["results","📈 Results"]];
+  const tabs=[["overview","📊 Overview"],["users","👥 Users"],["pending","🕐 Pending"+(pending.length>0?` (${pending.length})`:"")],["announce","📢 Announce"],["results","📈 Results"],["reportcard","📄 Report Cards"]];
   return(
     <div>
       <div style={S.h1}>⚙️ Admin Panel</div>
@@ -383,7 +395,7 @@ function AdminDash({user,data,setData,users,setUsers,toast,onLogout}){
                 <div key={u.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid "+C.border}}>
                   <div>
                     <div style={{fontWeight:600,fontSize:13}}>{u.name}</div>
-                    <div style={{fontSize:11,color:C.muted}}>@{u.username} {u.class?"· "+u.class:""} {u.subject?"· "+u.subject:""}</div>
+                    <div style={{fontSize:11,color:C.muted}}>@{u.username} {u.class?"· "+u.class:""} {u.subjects&&u.subjects.length>0?"· "+u.subjects.map(s=>s.subject+(s.class?" ("+s.class+")":"")).join(", "):u.subject?"· "+u.subject:""}</div>
                   </div>
                   <button style={{...S.btn(C.redBg,C.red),fontSize:11,padding:"4px 10px",border:"1px solid "+C.red+"44"}} onClick={()=>removeUser(u.id)}>Remove</button>
                 </div>
@@ -404,7 +416,7 @@ function AdminDash({user,data,setData,users,setUsers,toast,onLogout}){
             <div key={u.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid "+C.border}}>
               <div>
                 <div style={{fontWeight:600,fontSize:13}}>{u.name}</div>
-                <div style={{fontSize:11,color:C.muted}}>@{u.username} · {u.role} {u.class?"· "+u.class:""}</div>
+                <div style={{fontSize:11,color:C.muted}}>@{u.username} · {u.role} {u.class?"· "+u.class:""} {u.subjects&&u.subjects.length>0?"· "+u.subjects.map(s=>s.subject+(s.class?" ("+s.class+")":"")).join(", "):u.subject?"· "+u.subject:""}</div>
               </div>
               <div style={{display:"flex",gap:8}}>
                 <button style={{...S.btn(C.greenBg,C.green),fontSize:11,padding:"5px 12px",border:"1px solid "+C.green+"44"}} onClick={()=>approve(u.id)}>Approve</button>
@@ -416,6 +428,7 @@ function AdminDash({user,data,setData,users,setUsers,toast,onLogout}){
       )}
       {tab==="announce"&&<AnnouncementForm onPost={postAnnouncement}/>}
       {tab==="results"&&<ResultsView data={data} users={users} isAdmin/>}
+      {tab==="reportcard"&&<ReportCardAdmin data={data} setData={setData} users={users} toast={toast}/>}
     </div>
   );
 }
@@ -463,7 +476,7 @@ function TeacherDash({user,data,setData,users,toast}){
   return(
     <div>
       <div style={S.h1}>👩‍🏫 Teacher Panel</div>
-      <div style={S.sub}>Welcome, {user.name} · {user.subject||"Teacher"}</div>
+      <div style={S.sub}>Welcome, {user.name} · {(user.subjects&&user.subjects.length>0)?user.subjects.map(s=>s.subject+(s.class?" ("+s.class+")":"")).join(", "):(user.subject||"Teacher")}</div>
       <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border,flexWrap:"wrap"}}>
         {tabs.map(([t,l])=><button key={t} style={S.tab(tab===t)} onClick={()=>setTab(t)}>{l}</button>)}
       </div>
@@ -843,6 +856,7 @@ const QTYPES=[
 function CreateExam({user,data,setData,toast,onDone}){
   const[step,setStep]=useState(1);
   const[meta,setMeta]=useState({title:"",subject:user.subject||"",class:"",instructions:"",timeLimit:"",dueDate:""});
+  const teacherSubjects=user.subjects&&user.subjects.length>0?user.subjects:user.subject?[{subject:user.subject,class:""}]:[];
   const[questions,setQuestions]=useState([]);
   const[adding,setAdding]=useState(null);
 
@@ -882,7 +896,7 @@ function CreateExam({user,data,setData,toast,onDone}){
       {step===1&&(
         <div style={S.card}>
           <div style={{fontWeight:700,marginBottom:14}}>Step 1: Exam Details</div>
-          {[["Title","title","text"],["Subject","subject","text"],["Instructions","instructions","text"]].map(([l,k,t])=>(
+          {[["Title","title","text"],["Instructions","instructions","text"]].map(([l,k,t])=>(
             <div key={k} style={{marginBottom:10}}>
               <div style={{fontSize:11,color:C.muted,marginBottom:4}}>{l}</div>
               {k==="instructions"
@@ -890,6 +904,20 @@ function CreateExam({user,data,setData,toast,onDone}){
                 :<input type={t} value={meta[k]} onChange={e=>setMeta({...meta,[k]:e.target.value})} placeholder={l}/>}
             </div>
           ))}
+          <div style={{marginBottom:10}}>
+            <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Subject</div>
+            {teacherSubjects.length>1?(
+              <select value={meta.subject} onChange={e=>{
+                const sel=teacherSubjects.find(s=>s.subject===e.target.value);
+                setMeta({...meta,subject:e.target.value,class:sel?.class||meta.class});
+              }}>
+                <option value="">Select subject…</option>
+                {teacherSubjects.map((s,i)=><option key={i} value={s.subject}>{s.subject}{s.class?" ("+s.class+")":""}</option>)}
+              </select>
+            ):(
+              <input value={meta.subject} onChange={e=>setMeta({...meta,subject:e.target.value})} placeholder="Subject"/>
+            )}
+          </div>
           <div style={S.g2}>
             <div>
               <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Class</div>
@@ -1152,7 +1180,7 @@ function StudentDash({user,data,setData,toast}){
   const awaitingReview=mySubmissions.filter(s=>s.status==="pending");
   const graded=mySubmissions.filter(s=>s.status==="graded");
 
-  const tabs=[["overview","📊 Overview"],["exams","📝 My Exams"],["results","🏆 My Results"],["resources","📚 Resources"]];
+  const tabs=[["overview","📊 Overview"],["exams","📝 My Exams"],["results","🏆 My Results"],["resources","📚 Resources"],["reportcard","📄 Report Card"]];
 
   if(takingExam) return<ExamInterface exam={takingExam} user={user} data={data} setData={setData} toast={toast} onDone={()=>{setTakingExam(null);setTab("results");}}/>;
 
@@ -1261,6 +1289,7 @@ function StudentDash({user,data,setData,toast}){
 
       {tab==="results"&&<StudentResults submissions={mySubmissions} data={data}/>}
       {tab==="resources"&&<ResourcesPanel data={data} isStudent/>}
+      {tab==="reportcard"&&<StudentReportCard user={user} data={data}/>}
     </div>
   );
 }
@@ -1676,6 +1705,255 @@ function DeliberationPanel({subs,users,exam}){
   );
 }
 
+/* ═══════════════════════════ REPORT CARD — ADMIN ═══════════════════════════ */
+function ReportCardAdmin({data,setData,users,toast}){
+  const[schoolName,setSchoolName]=useState(data.schoolName||"EduIQ School");
+  const[saving,setSaving]=useState(false);
+  const[selStudent,setSelStudent]=useState("");
+  const[selTerm,setSelTerm]=useState("Term 1");
+  const[selYear,setSelYear]=useState(new Date().getFullYear().toString());
+  const[preview,setPreview]=useState(null);
+
+  const students=users.filter(u=>u.role==="student"&&u.approved);
+
+  async function saveSchoolName(){
+    setSaving(true);
+    const updated={...data,schoolName};
+    setData(d=>({...d,schoolName}));
+    await setOnlineData({schoolName});
+    setSaving(false);
+    toast("School name saved ✓");
+  }
+
+  function generateReportCard(){
+    if(!selStudent){toast("Select a student","err");return;}
+    const student=users.find(u=>u.id===selStudent||u.username===selStudent);
+    if(!student){toast("Student not found","err");return;}
+    const mySubs=(data.submissions||[]).filter(s=>(s.studentId===student.id||s.studentUsername===student.username)&&s.status==="graded");
+    const subjectMap={};
+    mySubs.forEach(sub=>{
+      const exam=(data.exams||[]).find(e=>e.id===sub.examId);
+      if(!exam)return;
+      const subj=exam.subject||"General";
+      if(!subjectMap[subj]||sub.pct>subjectMap[subj].pct){
+        subjectMap[subj]={examTitle:exam.title,pct:sub.pct,earned:sub.earned,total:sub.total,grade:getGrade(sub.pct||0)};
+      }
+    });
+    const subjects=Object.entries(subjectMap).map(([subj,v])=>({subject:subj,...v}));
+    const avg=subjects.length>0?Math.round(subjects.reduce((s,x)=>s+(x.pct||0),0)/subjects.length):0;
+    const overall=getGrade(avg);
+    const card={
+      id:uid(),studentId:student.id,studentName:student.name,
+      studentClass:student.class||"—",regNo:student.regNo||"—",
+      schoolName,term:selTerm,year:selYear,
+      subjects,avg,overall,
+      generatedAt:now(),generatedBy:"Admin",
+    };
+    // save to data
+    const existing=(data.reportCards||[]).filter(r=>!(r.studentId===student.id&&r.term===selTerm&&r.year===selYear));
+    const updated=[...existing,card];
+    setData(d=>({...d,reportCards:updated}));
+    dsSet("reportCards",updated);
+    setPreview(card);
+    toast("Report card generated ✓");
+  }
+
+  if(preview) return<ReportCardPreview card={preview} onBack={()=>setPreview(null)}/>;
+
+  const existingCards=(data.reportCards||[]);
+
+  return(
+    <div>
+      {/* School name setting */}
+      <div style={S.card}>
+        <div style={{fontWeight:700,marginBottom:4}}>🏫 School Name</div>
+        <div style={{fontSize:12,color:C.muted,marginBottom:10}}>This appears on all report cards. Only admins can change it.</div>
+        <div style={{display:"flex",gap:8}}>
+          <input value={schoolName} onChange={e=>setSchoolName(e.target.value)} placeholder="School name" style={{flex:1}}/>
+          <button style={{...S.btn(C.green),fontSize:12,padding:"8px 16px"}} onClick={saveSchoolName} disabled={saving}>
+            {saving?<><Spinner/> Saving…</>:"Save"}
+          </button>
+        </div>
+      </div>
+
+      {/* Generate card */}
+      <div style={S.card}>
+        <div style={{fontWeight:700,marginBottom:12}}>📄 Generate Report Card</div>
+        <div style={{marginBottom:10}}>
+          <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Student</div>
+          <select value={selStudent} onChange={e=>setSelStudent(e.target.value)}>
+            <option value="">Select student…</option>
+            {students.map(s=><option key={s.id} value={s.id}>{s.name} — {s.class||"—"} ({s.regNo||"—"})</option>)}
+          </select>
+        </div>
+        <div style={S.g2}>
+          <div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Term</div>
+            <select value={selTerm} onChange={e=>setSelTerm(e.target.value)}>
+              {["Term 1","Term 2","Term 3"].map(t=><option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Academic Year</div>
+            <input value={selYear} onChange={e=>setSelYear(e.target.value)} placeholder="e.g. 2025"/>
+          </div>
+        </div>
+        <button style={{...S.btn(),width:"100%"}} onClick={generateReportCard}>📄 Generate Report Card</button>
+      </div>
+
+      {/* Existing cards */}
+      {existingCards.length>0&&(
+        <div style={S.card}>
+          <div style={{fontWeight:700,marginBottom:10}}>Previously Generated</div>
+          {existingCards.slice().reverse().map(c=>(
+            <div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid "+C.border}}>
+              <div>
+                <div style={{fontWeight:600,fontSize:13}}>{c.studentName}</div>
+                <div style={{fontSize:11,color:C.muted}}>{c.term} · {c.year} · {c.studentClass}</div>
+              </div>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <span style={{...S.badge(c.overall.c,c.overall.c+"22")}}>{c.overall.g} · {c.avg}%</span>
+                <button style={{...S.btn(C.accentLight,C.accent),fontSize:11,padding:"4px 10px",border:"1px solid "+C.borderAccent}} onClick={()=>setPreview(c)}>View</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Report Card Preview (printable) ─── */
+function ReportCardPreview({card,onBack}){
+  const gr=card.overall;
+  return(
+    <div className="fade-in">
+      <button onClick={onBack} style={{...S.btn(C.elevated,C.muted),border:"1px solid "+C.border,fontSize:12,padding:"6px 12px",marginBottom:14}}>← Back</button>
+      <div id="report-card-print" style={{background:"#fff",border:"2px solid "+C.accent,borderRadius:14,overflow:"hidden",boxShadow:"0 4px 24px rgba(99,102,241,.12)"}}>
+        {/* Header */}
+        <div style={{background:"linear-gradient(135deg,"+C.accent+","+C.accentDark+")",padding:"20px 20px 16px",color:"#fff",textAlign:"center"}}>
+          <div style={{fontSize:26,marginBottom:4}}>🎓</div>
+          <div style={{fontSize:18,fontWeight:900,letterSpacing:-0.5}}>{card.schoolName}</div>
+          <div style={{fontSize:12,opacity:.85,marginTop:2,letterSpacing:1,textTransform:"uppercase"}}>Academic Report Card</div>
+        </div>
+
+        {/* Student info — auto-filled */}
+        <div style={{padding:"14px 16px",borderBottom:"1px solid "+C.border,background:C.elevated}}>
+          <div style={S.g2}>
+            {[["Student Name",card.studentName],["Registration No.",card.regNo],["Class / Form",card.studentClass],["Academic Year",card.year],["Term",card.term],["Date Issued",card.generatedAt?.slice(0,10)]].map(([l,v])=>(
+              <div key={l}>
+                <div style={{fontSize:10,color:C.faint,textTransform:"uppercase",letterSpacing:".6px"}}>{l}</div>
+                <div style={{fontWeight:700,fontSize:13,color:C.text,marginTop:1}}>{v||"—"}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Subjects table */}
+        <div style={{padding:"14px 16px"}}>
+          <div style={{fontWeight:700,marginBottom:10,fontSize:13}}>Subject Results</div>
+          {card.subjects.length===0&&(
+            <div style={{color:C.faint,fontSize:12,textAlign:"center",padding:20}}>No graded exams found for this student.</div>
+          )}
+          {card.subjects.length>0&&(
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead>
+                <tr style={{background:C.elevated}}>
+                  {["Subject","Marks","Score","Grade","Remarks"].map(h=>(
+                    <th key={h} style={{padding:"7px 9px",textAlign:"left",color:C.muted,fontWeight:700,borderBottom:"2px solid "+C.border,fontSize:10,textTransform:"uppercase"}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {card.subjects.map((s,i)=>(
+                  <tr key={i} style={{background:i%2===0?"transparent":C.elevated}}>
+                    <td style={{padding:"8px 9px",fontWeight:600}}>{s.subject}</td>
+                    <td style={{padding:"8px 9px",color:C.muted}}>{s.earned}/{s.total}</td>
+                    <td style={{padding:"8px 9px"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:6}}>
+                        <span style={{fontWeight:700,color:s.grade.c}}>{s.pct}%</span>
+                        <div style={{flex:1,height:4,background:C.border,borderRadius:4,minWidth:36}}>
+                          <div style={{height:"100%",width:s.pct+"%",background:s.grade.c,borderRadius:4}}/>
+                        </div>
+                      </div>
+                    </td>
+                    <td style={{padding:"8px 9px"}}><span style={{...S.badge(s.grade.c,s.grade.c+"22")}}>{s.grade.g}</span></td>
+                    <td style={{padding:"8px 9px",color:C.muted}}>{s.grade.l}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Overall result */}
+        <div style={{margin:"0 16px 16px",padding:"14px 16px",borderRadius:10,
+          background:"linear-gradient(135deg,"+gr.c+"15,"+gr.c+"05)",border:"1.5px solid "+gr.c+"44"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div>
+              <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:".6px",marginBottom:2}}>Overall Performance</div>
+              <div style={{fontSize:28,fontWeight:900,color:gr.c}}>{card.avg}%</div>
+              <div style={{fontSize:13,color:C.muted}}>{gr.g} — {gr.l}</div>
+            </div>
+            <div style={{fontSize:48}}>{gr.g==="A"?"🏆":gr.g==="B"?"🥈":gr.g==="C"?"👍":gr.g==="D"?"📚":"⚠️"}</div>
+          </div>
+          <div style={{marginTop:10,height:8,background:C.border,borderRadius:6}}>
+            <div style={{height:"100%",width:card.avg+"%",background:gr.c,borderRadius:6,transition:"width .5s"}}/>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{padding:"12px 16px",borderTop:"1px solid "+C.border,background:C.elevated,display:"flex",justifyContent:"space-between",fontSize:10,color:C.faint}}>
+          <span>Generated: {card.generatedAt?.slice(0,10)}</span>
+          <span>{card.schoolName} · EduIQ System</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Student Report Card View ─── */
+function StudentReportCard({user,data}){
+  const myCards=(data.reportCards||[]).filter(c=>c.studentId===user.id||c.studentName===user.name);
+  const[preview,setPreview]=useState(null);
+
+  if(preview) return<ReportCardPreview card={preview} onBack={()=>setPreview(null)}/>;
+
+  if(myCards.length===0){
+    return(
+      <div style={{...S.card,textAlign:"center",color:C.faint,padding:40}}>
+        <div style={{fontSize:36,marginBottom:8}}>📄</div>
+        <div style={{fontWeight:600,color:C.text}}>No report cards yet</div>
+        <div style={{fontSize:12,marginTop:4}}>Your teacher or admin will generate your report card when results are ready.</div>
+      </div>
+    );
+  }
+  return(
+    <div>
+      <div style={{...S.card,background:"linear-gradient(135deg,"+C.accent+"15,"+C.accent+"05)",border:"1.5px solid "+C.borderAccent}}>
+        <div style={{fontWeight:700,color:C.accent}}>📄 Your Report Cards</div>
+        <div style={{fontSize:12,color:C.muted,marginTop:2}}>Issued by {data.schoolName||"your school"}</div>
+      </div>
+      {myCards.slice().reverse().map(c=>(
+        <div key={c.id} style={S.card}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+            <div>
+              <div style={{fontWeight:700,fontSize:14}}>{c.term} · {c.year}</div>
+              <div style={{fontSize:11,color:C.muted,marginTop:2}}>{c.studentClass} · Issued {c.generatedAt?.slice(0,10)}</div>
+              <div style={{fontSize:11,color:C.muted,marginTop:1}}>{c.subjects.length} subject{c.subjects.length!==1?"s":""}</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:22,fontWeight:900,color:c.overall.c}}>{c.avg}%</div>
+              <span style={{...S.badge(c.overall.c,c.overall.c+"22")}}>{c.overall.g} — {c.overall.l}</span>
+            </div>
+          </div>
+          <button style={{...S.btn(),width:"100%",marginTop:10,fontSize:12}} onClick={()=>setPreview(c)}>📄 View Report Card</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ═══════════════════════════ RESOURCES PANEL ═══════════════════════════ */
 function ResourcesPanel({user,data,setData,toast,isTeacher,isStudent}){
   const[form,setForm]=useState({title:"",subject:"",type:"Notes",url:"",description:""});
@@ -1786,12 +2064,14 @@ function App(){
         if(u&&u.length>0) setUsers(u);
         if(d){
           setData({
+            schoolName:d.schoolName||INIT_DATA.schoolName,
             students:d.students||INIT_DATA.students,
             teachers:d.teachers||INIT_DATA.teachers,
             resources:d.resources||[],
             exams:d.exams||[],
             submissions:d.submissions||[],
             announcements:d.announcements||[],
+            reportCards:d.reportCards||[],
           });
           _latestData=d;
         }
