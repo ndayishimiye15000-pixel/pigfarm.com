@@ -61,31 +61,27 @@ const fmtNum=(n)=>Math.round(n||0).toLocaleString();
 /* ─── Capital Helpers ─── */
 
 // ══════════════════════════════════════════════════════════
-// SINGLE SOURCE OF TRUTH: capital balance is ALWAYS derived
-// from actual live data arrays (feeds, sales, expenses, incomes)
-// + the manual capital.transactions that have NO refId tie
-// (i.e. manually added injections/adjustments).
-// This means: delete a feed → balance drops immediately.
+// CAPITAL BALANCE = Initial + Sales Income + Other Income
+//                  - Feed Costs - Other Expenses
+// Derived 100% from actual live data arrays.
+// capital.transactions are kept ONLY for manual injections
+// (no refId) like owner investments — shown in history tab.
+// Deleted records → balance updates instantly, no stale data.
 // ══════════════════════════════════════════════════════════
-
-// Rebuild capital balance purely from actual data arrays.
-// Pass the live arrays so deletions/edits instantly reflect.
 function calcCapitalBalance(capital, feeds, sales, expenses, incomes){
   const initial = capital.initial || 0;
-  // Sum actual income from sales + manual incomes
   const saleInc  = (sales   ||[]).reduce((s,x)=>s+(x.total   ||0),0);
   const otherInc = (incomes  ||[]).reduce((s,x)=>s+(x.amount  ||0),0);
-  // Sum actual expenses from feeds + manual expenses
   const feedExp  = (feeds    ||[]).reduce((s,x)=>s+(x.cost    ||0),0);
   const otherExp = (expenses ||[]).reduce((s,x)=>s+(x.amount  ||0),0);
-  // Manual-only capital transactions (no refId = hand-entered injections/adjustments)
-  const manualTxTotal = (capital.transactions||[])
+  // Only manual capital injections (no refId) count from transactions
+  const manualOnly = (capital.transactions||[])
     .filter(t=>!t.refId)
     .reduce((s,t)=>{
       const amt=parseFloat(t.amount)||0;
       return t.type==="income"?s+amt:s-amt;
     },0);
-  return initial + saleInc + otherInc - feedExp - otherExp + manualTxTotal;
+  return initial + saleInc + otherInc - feedExp - otherExp + manualOnly;
 }
 
 // Purge orphaned capital transactions whose refId no longer maps to a real record.
@@ -2157,7 +2153,6 @@ function App(){
 
   function applyFarmData(data){
     if(!data) return;
-    // Always apply arrays (even empty) so worker-submitted data is never lost
     if(Array.isArray(data.pigs)&&data.pigs.length>0) setPigs(data.pigs);
     if(Array.isArray(data.feeds))    setFeeds(data.feeds);
     if(Array.isArray(data.sales))    setSales(data.sales);
@@ -2170,7 +2165,12 @@ function App(){
     if(Array.isArray(data.tasks))        setTasks(data.tasks);
     if(Array.isArray(data.vaccinations)) setVaccinations(data.vaccinations);
     if(Array.isArray(data.sessions))   setSessions(data.sessions);
-    if(data.capital&&typeof data.capital==="object") setCapital(data.capital);
+    if(data.capital&&typeof data.capital==="object"){
+      // Strip ALL refId-linked transactions on load — balance is derived from actual arrays.
+      // Only keep truly manual entries (no refId) like capital injections.
+      const cleanTxs=(data.capital.transactions||[]).filter(t=>!t.refId);
+      setCapital({...data.capital, transactions:cleanTxs});
+    }
   }
 
   useEffect(()=>{
@@ -2237,7 +2237,9 @@ function App(){
   useEffect(()=>{
     if(!capitalLoaded) return;
     if(!capitalSynced.current){capitalSynced.current=true;return;}
-    setOnlineFarmData({capital}); // capital saved as top-level key
+    // Strip refId transactions before saving — balance is derived from arrays, not transactions
+    const capitalToSave={...capital, transactions:(capital.transactions||[]).filter(t=>!t.refId)};
+    setOnlineFarmData({capital:capitalToSave});
   },[capital,capitalLoaded]);
 
   // Save sessions to JSONBin whenever they change
