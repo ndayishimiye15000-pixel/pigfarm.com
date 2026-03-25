@@ -1432,7 +1432,7 @@ function ProfitLossAnalysis({pigs,feeds,sales,logs,expenses,incomes,reproduction
           return(<div key={m} style={{marginBottom:14}}>
             <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:4}}>
               <span style={{fontWeight:600,color:C.text}}>{label}</span>
-              <span style={{color:profit>=0?C.accent:C.red,fontWeight:700}}>{profit>=0?"+"}{fmtRWF(profit)}</span>
+              <span style={{color:profit>=0?C.accent:C.red,fontWeight:700}}>{profit>=0?"+":""}{fmtRWF(profit)}</span>
             </div>
             <div style={{marginBottom:3}}>
               <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.faint,marginBottom:2}}>
