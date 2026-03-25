@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>EduIQ — Online Automated School System</title>
+<title>EduIQ — Online School System</title>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -34,10 +34,7 @@ const uid=()=>Math.random().toString(36).slice(2,10);
 const toDay=()=>new Date().toISOString().slice(0,10);
 const now=()=>new Date().toISOString();
 
-/* ═══════════════════════════════════════════════
-   JSONBIN STORAGE  — same pattern as FarmIQ
-═══════════════════════════════════════════════ */
-// ⚠️ Replace these with your own JSONBin IDs & key
+/* ═══════════════════════════ JSONBIN STORAGE ═══════════════════════════ */
 const JBIN_KEY  = "$2a$10$LDktMj7oTNhMBjIidsIPoelQmzqlhnMXDvMyMHbIe9yYope1CnBLO";
 const JBIN_USERS_ID = "69c3ac3faa77b81da9196648";
 const JBIN_DATA_ID  = "69c3acc6b7ec241ddc9f8619";
@@ -86,18 +83,18 @@ function setOnlineData(patch){
 }
 function dsSet(key,val){return setOnlineData({[key]:val});}
 
-/* ═══════════════════════════════════════════════
-   COLOUR + STYLE TOKENS
-═══════════════════════════════════════════════ */
+/* ═══════════════════════════ COLOUR TOKENS ═══════════════════════════ */
 const C={
-  accent:"#6366f1", accentDark:"#4f46e5", accentLight:"rgba(99,102,241,.12)",
-  green:"#10b981",  greenBg:"rgba(16,185,129,.1)",
-  red:"#ef4444",    redBg:"rgba(239,68,68,.1)",
-  amber:"#f59e0b",  amberBg:"rgba(245,158,11,.08)",
-  blue:"#3b82f6",   blueBg:"rgba(59,130,246,.1)",
-  text:"#1e293b",   muted:"#64748b", faint:"#94a3b8",
-  bg:"#f0f4ff",     card:"#ffffff",  elevated:"#f8faff",
-  border:"#e2e8f0", borderAccent:"rgba(99,102,241,.25)",
+  accent:"#6366f1",accentDark:"#4f46e5",accentLight:"rgba(99,102,241,.12)",
+  green:"#10b981",greenBg:"rgba(16,185,129,.1)",
+  red:"#ef4444",redBg:"rgba(239,68,68,.1)",
+  amber:"#f59e0b",amberBg:"rgba(245,158,11,.08)",
+  blue:"#3b82f6",blueBg:"rgba(59,130,246,.1)",
+  purple:"#8b5cf6",purpleBg:"rgba(139,92,246,.1)",
+  teal:"#14b8a6",tealBg:"rgba(20,184,166,.1)",
+  text:"#1e293b",muted:"#64748b",faint:"#94a3b8",
+  bg:"#f0f4ff",card:"#ffffff",elevated:"#f8faff",
+  border:"#e2e8f0",borderAccent:"rgba(99,102,241,.25)",
 };
 const S={
   card:{background:C.card,borderRadius:14,padding:"16px",border:"1px solid "+C.border,
@@ -123,9 +120,7 @@ const S={
   loader:{width:16,height:16,border:"2px solid "+C.accentLight,borderTopColor:C.accent,borderRadius:"50%"},
 };
 
-/* ═══════════════════════════════════════════════
-   SEED DATA
-═══════════════════════════════════════════════ */
+/* ═══════════════════════════ SEED DATA ═══════════════════════════ */
 const INIT_USERS=[
   {id:"u1",name:"System Admin",username:"admin",password:"admin123",role:"admin",approved:true,createdAt:toDay()},
   {id:"u2",name:"Mrs. Uwimana",username:"teacher1",password:"teach123",role:"teacher",approved:true,subject:"Mathematics",createdAt:toDay()},
@@ -147,23 +142,26 @@ const INIT_DATA={
   announcements:[],
 };
 
-/* ═══════════════════════════════════════════════
-   HELPERS
-═══════════════════════════════════════════════ */
-function getGrade(pct){
-  if(pct>=80)return{g:"A",l:"Distinction",c:C.green};
-  if(pct>=70)return{g:"B",l:"Merit",c:C.blue};
-  if(pct>=60)return{g:"C",l:"Credit",c:C.accent};
-  if(pct>=50)return{g:"D",l:"Pass",c:C.amber};
-  return{g:"F",l:"Fail",c:C.red};
-}
-function calcScore(answers,questions){
+/* ═══════════════════════════ QUESTION TYPE HELPERS ═══════════════════════════ */
+// Types that can be auto-graded
+const AUTO_TYPES=["mcq","fill","match","tf"];
+// Types that need manual/AI grading
+const MANUAL_TYPES=["short","essay"];
+
+function isAutoGradable(type){return AUTO_TYPES.includes(type);}
+function isManualType(type){return MANUAL_TYPES.includes(type);}
+
+// Auto-score only the auto-gradable questions
+function calcAutoScore(answers,questions){
   let earned=0,total=0;
   (questions||[]).forEach(q=>{
+    if(!isAutoGradable(q.type))return;
     total+=q.marks||1;
     const a=answers[q.id];
     if(!a)return;
     if(q.type==="mcq"||q.type==="fill"){
+      if((a||"").trim().toLowerCase()===(q.answer||"").trim().toLowerCase())earned+=q.marks||1;
+    }else if(q.type==="tf"){
       if((a||"").trim().toLowerCase()===(q.answer||"").trim().toLowerCase())earned+=q.marks||1;
     }else if(q.type==="match"){
       let pts=0;
@@ -171,28 +169,36 @@ function calcScore(answers,questions){
         if((a[p.id]||"").trim().toLowerCase()===(p.right||"").trim().toLowerCase())pts+=1;
       });
       earned+=Math.round(((pts/(q.pairs?.length||1))*(q.marks||1)));
-    }else{
-      // short answer — partial credit by keyword matching
-      const kw=(q.answer||"").toLowerCase().split(/[,\s]+/).filter(Boolean);
-      const resp=(a||"").toLowerCase();
-      const matched=kw.filter(k=>resp.includes(k)).length;
-      const pct=kw.length>0?matched/kw.length:0;
-      earned+=Math.round(pct*(q.marks||1));
     }
   });
-  return{earned,total,pct:total>0?Math.round((earned/total)*100):0};
+  return{earned,total};
 }
+
+function calcTotalMarks(questions){
+  return (questions||[]).reduce((s,q)=>s+(parseInt(q.marks)||1),0);
+}
+
+function examHasManual(exam){
+  return (exam.questions||[]).some(q=>isManualType(q.type));
+}
+
+function getGrade(pct){
+  if(pct>=80)return{g:"A",l:"Distinction",c:C.green};
+  if(pct>=70)return{g:"B",l:"Merit",c:C.blue};
+  if(pct>=60)return{g:"C",l:"Credit",c:C.accent};
+  if(pct>=50)return{g:"D",l:"Pass",c:C.amber};
+  return{g:"F",l:"Fail",c:C.red};
+}
+
 function Spinner(){return<span className="spin" style={S.loader}/>;}
 
-/* ═══════════════════════════════════════════════
-   TOAST
-═══════════════════════════════════════════════ */
+/* ═══════════════════════════ TOAST ═══════════════════════════ */
 function Toast({msg,type,onDone}){
-  useEffect(()=>{const t=setTimeout(onDone,2800);return()=>clearTimeout(t);},[]);
+  useEffect(()=>{const t=setTimeout(onDone,3000);return()=>clearTimeout(t);},[]);
   const bg=type==="ok"?C.green:type==="err"?C.red:C.accent;
   return<div className="fade-in" style={{position:"fixed",top:16,right:16,zIndex:9999,
     background:bg,color:"#fff",padding:"10px 18px",borderRadius:10,fontSize:13,fontWeight:600,
-    boxShadow:"0 4px 20px rgba(0,0,0,.18)",maxWidth:300}}>{msg}</div>;
+    boxShadow:"0 4px 20px rgba(0,0,0,.18)",maxWidth:320}}>{msg}</div>;
 }
 function useToast(){
   const[t,setT]=useState(null);
@@ -201,9 +207,7 @@ function useToast(){
   return[show,el];
 }
 
-/* ═══════════════════════════════════════════════
-   LOGIN PAGE
-═══════════════════════════════════════════════ */
+/* ═══════════════════════════ LOGIN PAGE ═══════════════════════════ */
 function LoginPage({onLogin,users,setUsers}){
   const[form,setForm]=useState({username:"",password:""});
   const[err,setErr]=useState("");
@@ -216,11 +220,10 @@ function LoginPage({onLogin,users,setUsers}){
     setTimeout(()=>{
       const u=users.find(x=>x.username===form.username&&x.password===form.password);
       if(!u){setErr("Invalid username or password.");setLoading(false);return;}
-      if(!u.approved){setErr("Your account is pending approval.");setLoading(false);return;}
+      if(!u.approved){setErr("Your account is pending admin approval.");setLoading(false);return;}
       onLogin(u);setLoading(false);
     },600);
   }
-
   async function doRegister(){
     if(!regForm.name||!regForm.username||!regForm.password){setErr("Fill all fields.");return;}
     if(users.find(u=>u.username===regForm.username)){setErr("Username already taken.");return;}
@@ -235,31 +238,25 @@ function LoginPage({onLogin,users,setUsers}){
     setErr("Registration submitted! Wait for admin approval.");
     setReg(false);
   }
-
   return(
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
       <div style={{width:"100%",maxWidth:380}}>
-        {/* Logo */}
         <div style={{textAlign:"center",marginBottom:28}}>
           <div style={{fontSize:42,marginBottom:8}}>🎓</div>
           <div style={{fontSize:28,fontWeight:900,color:C.accent,letterSpacing:-1}}>EduIQ</div>
           <div style={{fontSize:12,color:C.muted,letterSpacing:2,textTransform:"uppercase"}}>Online School System</div>
         </div>
-
         <div style={{...S.card,padding:24}}>
           {!reg?(
             <>
-              <div style={{fontWeight:700,fontSize:15,marginBottom:16,color:C.text}}>Sign In</div>
-              <div style={{marginBottom:12}}>
-                <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Username</div>
-                <input value={form.username} onChange={e=>setForm({...form,username:e.target.value})}
-                  placeholder="Enter username" onKeyDown={e=>e.key==="Enter"&&doLogin()}/>
-              </div>
-              <div style={{marginBottom:16}}>
-                <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Password</div>
-                <input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})}
-                  placeholder="Enter password" onKeyDown={e=>e.key==="Enter"&&doLogin()}/>
-              </div>
+              <div style={{fontWeight:700,fontSize:15,marginBottom:16}}>Sign In</div>
+              {[["Username","username","text"],["Password","password","password"]].map(([l,k,t])=>(
+                <div key={k} style={{marginBottom:12}}>
+                  <div style={{fontSize:11,color:C.muted,marginBottom:4}}>{l}</div>
+                  <input type={t} value={form[k]} onChange={e=>setForm({...form,[k]:e.target.value})}
+                    placeholder={"Enter "+l.toLowerCase()} onKeyDown={e=>e.key==="Enter"&&doLogin()}/>
+                </div>
+              ))}
               {err&&<div style={{color:C.red,fontSize:12,marginBottom:12,padding:"8px 12px",background:C.redBg,borderRadius:7}}>{err}</div>}
               <button style={{...S.btn(),width:"100%",padding:"11px"}} onClick={doLogin} disabled={loading}>
                 {loading?<><Spinner/> Signing in…</>:"Sign In →"}
@@ -268,12 +265,11 @@ function LoginPage({onLogin,users,setUsers}){
                 No account?{" "}
                 <button onClick={()=>{setReg(true);setErr("");}} style={{background:"none",border:"none",color:C.accent,cursor:"pointer",fontWeight:700,fontFamily:"inherit",fontSize:12}}>Register</button>
               </div>
-              {/* Demo hints */}
               <div style={{marginTop:16,padding:"10px 12px",background:C.elevated,borderRadius:8,border:"1px solid "+C.border}}>
                 <div style={{fontSize:10,fontWeight:700,color:C.muted,marginBottom:6}}>DEMO ACCOUNTS</div>
                 {[["admin","admin123","Admin"],["teacher1","teach123","Teacher"],["student1","pass123","Student"]].map(([u,p,r])=>(
                   <div key={u} style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}>
-                    <span style={{color:C.text,fontWeight:600}}>{r}</span>
+                    <span style={{fontWeight:600,color:C.text}}>{r}</span>
                     <span style={{color:C.muted}}>{u} / {p}</span>
                   </div>
                 ))}
@@ -281,7 +277,7 @@ function LoginPage({onLogin,users,setUsers}){
             </>
           ):(
             <>
-              <div style={{fontWeight:700,fontSize:15,marginBottom:16,color:C.text}}>Create Account</div>
+              <div style={{fontWeight:700,fontSize:15,marginBottom:16}}>Create Account</div>
               {[["Full Name","name","text"],["Username","username","text"],["Password","password","password"]].map(([l,k,t])=>(
                 <div key={k} style={{marginBottom:10}}>
                   <div style={{fontSize:11,color:C.muted,marginBottom:4}}>{l}</div>
@@ -321,9 +317,7 @@ function LoginPage({onLogin,users,setUsers}){
   );
 }
 
-/* ═══════════════════════════════════════════════
-   ADMIN DASHBOARD
-═══════════════════════════════════════════════ */
+/* ═══════════════════════════ ADMIN DASHBOARD ═══════════════════════════ */
 function AdminDash({user,data,setData,users,setUsers,toast,onLogout}){
   const[tab,setTab]=useState("overview");
   const students=users.filter(u=>u.role==="student");
@@ -349,18 +343,13 @@ function AdminDash({user,data,setData,users,setUsers,toast,onLogout}){
   }
 
   const tabs=[["overview","📊 Overview"],["users","👥 Users"],["pending","🕐 Pending"+(pending.length>0?` (${pending.length})`:"")],["announce","📢 Announce"],["results","📈 Results"]];
-
   return(
     <div>
       <div style={S.h1}>⚙️ Admin Panel</div>
       <div style={S.sub}>System overview · User management · Announcements</div>
-
-      {/* Tabs */}
       <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border,flexWrap:"wrap"}}>
         {tabs.map(([t,l])=><button key={t} style={S.tab(tab===t)} onClick={()=>setTab(t)}>{l}</button>)}
       </div>
-
-      {/* OVERVIEW */}
       {tab==="overview"&&(
         <div>
           <div style={S.g3}>
@@ -373,20 +362,18 @@ function AdminDash({user,data,setData,users,setUsers,toast,onLogout}){
               <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
             ))}
           </div>
-          <div style={{...S.card}}>
+          <div style={S.card}>
             <div style={{fontWeight:700,marginBottom:10}}>Recent Announcements</div>
             {(data.announcements||[]).length===0&&<div style={{color:C.faint,fontSize:13}}>No announcements yet.</div>}
             {(data.announcements||[]).slice(-3).reverse().map(a=>(
               <div key={a.id} style={{padding:"8px 0",borderBottom:"1px solid "+C.border,fontSize:13}}>
-                <div style={{fontWeight:600,color:C.text}}>{a.text}</div>
+                <div style={{fontWeight:600}}>{a.text}</div>
                 <div style={{fontSize:11,color:C.muted}}>→ {a.target} · {a.author} · {a.date}</div>
               </div>
             ))}
           </div>
         </div>
       )}
-
-      {/* USERS */}
       {tab==="users"&&(
         <div>
           {["teacher","student"].map(role=>(
@@ -405,17 +392,12 @@ function AdminDash({user,data,setData,users,setUsers,toast,onLogout}){
           ))}
         </div>
       )}
-
-      {/* PENDING */}
       {tab==="pending"&&(
         <div style={S.card}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
             <div style={{fontWeight:700}}>Pending Approvals</div>
             <button style={{...S.btn(C.blueBg,C.blue),fontSize:11,padding:"5px 12px",border:"1px solid "+C.blue+"44"}}
-              onClick={async()=>{
-                const u=await getOnlineUsers();
-                if(u&&u.length>0){setUsers(u);toast("Refreshed ✓");}
-              }}>🔄 Refresh</button>
+              onClick={async()=>{const u=await getOnlineUsers();if(u&&u.length>0){setUsers(u);toast("Refreshed ✓");}}}>🔄 Refresh</button>
           </div>
           {pending.length===0&&<div style={{color:C.faint,fontSize:13}}>No pending registrations.</div>}
           {pending.map(u=>(
@@ -432,11 +414,7 @@ function AdminDash({user,data,setData,users,setUsers,toast,onLogout}){
           ))}
         </div>
       )}
-
-      {/* ANNOUNCE */}
       {tab==="announce"&&<AnnouncementForm onPost={postAnnouncement}/>}
-
-      {/* RESULTS */}
       {tab==="results"&&<ResultsView data={data} users={users} isAdmin/>}
     </div>
   );
@@ -465,17 +443,23 @@ function AnnouncementForm({onPost}){
   );
 }
 
-/* ═══════════════════════════════════════════════
-   TEACHER DASHBOARD
-═══════════════════════════════════════════════ */
+/* ═══════════════════════════ TEACHER DASHBOARD ═══════════════════════════ */
 function TeacherDash({user,data,setData,users,toast}){
   const[tab,setTab]=useState("overview");
   const myExams=(data.exams||[]).filter(e=>e.teacherId===user.id||e.teacherUsername===user.username);
   const myResources=(data.resources||[]).filter(r=>r.teacherId===user.id||r.teacherUsername===user.username);
   const allSubs=(data.submissions||[]);
+  const mySubs=allSubs.filter(s=>myExams.find(e=>e.id===s.examId));
+  const pendingSubs=mySubs.filter(s=>s.status==="pending");
 
-  const tabs=[["overview","📊 Overview"],["exams","📝 My Exams"],["create","➕ Create Exam"],["resources","📚 Resources"],["results","📈 Results"]];
-
+  const tabs=[
+    ["overview","📊 Overview"],
+    ["exams","📝 My Exams"],
+    ["create","➕ Create"],
+    ["grading","📋 Grading"+(pendingSubs.length>0?` (${pendingSubs.length})`:"")],
+    ["resources","📚 Resources"],
+    ["results","📈 Results"],
+  ];
   return(
     <div>
       <div style={S.h1}>👩‍🏫 Teacher Panel</div>
@@ -483,41 +467,384 @@ function TeacherDash({user,data,setData,users,toast}){
       <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border,flexWrap:"wrap"}}>
         {tabs.map(([t,l])=><button key={t} style={S.tab(tab===t)} onClick={()=>setTab(t)}>{l}</button>)}
       </div>
-
       {tab==="overview"&&(
         <div>
           <div style={S.g3}>
-            {[{l:"My Exams",v:myExams.length,c:C.accent},{l:"Resources",v:myResources.length,c:C.green},{l:"Submissions",v:allSubs.filter(s=>myExams.find(e=>e.id===s.examId)).length,c:C.blue}].map(s=>(
+            {[{l:"My Exams",v:myExams.length,c:C.accent},{l:"Pending Grading",v:pendingSubs.length,c:C.amber},{l:"Graded",v:mySubs.filter(s=>s.status==="graded").length,c:C.green}].map(s=>(
               <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
             ))}
           </div>
+          {pendingSubs.length>0&&(
+            <div style={{...S.card,border:"1.5px solid "+C.amber+"66",background:C.amberBg}}>
+              <div style={{fontWeight:700,color:C.amber,marginBottom:8}}>⏰ Submissions Awaiting Your Review</div>
+              {pendingSubs.slice(0,3).map(s=>{
+                const exam=myExams.find(e=>e.id===s.examId);
+                return(
+                  <div key={s.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid "+C.border}}>
+                    <div>
+                      <div style={{fontWeight:600,fontSize:13}}>{s.studentName}</div>
+                      <div style={{fontSize:11,color:C.muted}}>{exam?.title||"Exam"} · {s.submittedAt?.slice(0,10)}</div>
+                    </div>
+                    <button style={{...S.btn(C.amber+"22",C.amber),fontSize:11,border:"1px solid "+C.amber+"44"}} onClick={()=>setTab("grading")}>Grade →</button>
+                  </div>
+                );
+              })}
+              {pendingSubs.length>3&&<div style={{fontSize:11,color:C.muted,marginTop:6}}>+{pendingSubs.length-3} more pending…</div>}
+            </div>
+          )}
           <AnnouncementsPanel data={data} role="teachers"/>
         </div>
       )}
-
       {tab==="exams"&&<ExamList exams={myExams} data={data} setData={setData} toast={toast} isTeacher/>}
       {tab==="create"&&<CreateExam user={user} data={data} setData={setData} toast={toast} onDone={()=>setTab("exams")}/>}
+      {tab==="grading"&&<GradingPanel user={user} data={data} setData={setData} myExams={myExams} toast={toast}/>}
       {tab==="resources"&&<ResourcesPanel user={user} data={data} setData={setData} toast={toast} isTeacher/>}
       {tab==="results"&&<ResultsView data={data} users={users} myExams={myExams}/>}
     </div>
   );
 }
 
-/* ═══════════════════════════════════════════════
-   CREATE EXAM
-═══════════════════════════════════════════════ */
+/* ═══════════════════════════ GRADING PANEL ═══════════════════════════ */
+function GradingPanel({user,data,setData,myExams,toast}){
+  const[selExam,setSelExam]=useState("");
+  const[gradingSub,setGradingSub]=useState(null);
+
+  const allSubs=data.submissions||[];
+  const pendingSubs=allSubs.filter(s=>{
+    const exam=myExams.find(e=>e.id===s.examId);
+    return exam&&s.status==="pending";
+  });
+  const filteredSubs=selExam?pendingSubs.filter(s=>s.examId===selExam):pendingSubs;
+
+  if(gradingSub){
+    const exam=myExams.find(e=>e.id===gradingSub.examId);
+    return<MarkingInterface
+      sub={gradingSub} exam={exam} data={data} setData={setData} toast={toast}
+      onDone={()=>setGradingSub(null)}/>;
+  }
+
+  return(
+    <div>
+      <div style={{...S.card,background:"linear-gradient(135deg,"+C.amber+"15,"+C.amber+"05)",border:"1.5px solid "+C.amber+"44"}}>
+        <div style={{fontWeight:700,fontSize:14,color:C.amber,marginBottom:4}}>📋 Submission Grading Queue</div>
+        <div style={{fontSize:12,color:C.muted}}>Review student answers, assign marks, and publish grades. Students will only see their results after you publish.</div>
+      </div>
+
+      <div style={{marginBottom:12}}>
+        <select value={selExam} onChange={e=>setSelExam(e.target.value)} style={S.inp}>
+          <option value="">All pending submissions</option>
+          {myExams.map(e=><option key={e.id} value={e.id}>{e.title}</option>)}
+        </select>
+      </div>
+
+      {filteredSubs.length===0&&(
+        <div style={{...S.card,textAlign:"center",color:C.faint,padding:40}}>
+          <div style={{fontSize:32,marginBottom:8}}>✅</div>
+          <div style={{fontWeight:600}}>All caught up!</div>
+          <div style={{fontSize:12,marginTop:4}}>No pending submissions to grade.</div>
+        </div>
+      )}
+
+      {filteredSubs.map(s=>{
+        const exam=myExams.find(e=>e.id===s.examId);
+        const manualQs=(exam?.questions||[]).filter(q=>isManualType(q.type));
+        return(
+          <div key={s.id} style={S.card}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:14}}>{s.studentName}</div>
+                <div style={{fontSize:11,color:C.muted,marginTop:2}}>{s.studentClass||"—"} · {exam?.title||"Exam"}</div>
+                <div style={{fontSize:11,color:C.muted,marginTop:1}}>Submitted: {s.submittedAt?.slice(0,10)}</div>
+                {s.autoScored&&(
+                  <div style={{fontSize:11,color:C.blue,marginTop:4}}>
+                    Auto-graded: {s.autoScored.earned}/{s.autoScored.total} marks
+                    {manualQs.length>0&&<span style={{color:C.amber}}> · {manualQs.length} question{manualQs.length>1?"s":""} need manual grading</span>}
+                  </div>
+                )}
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-end"}}>
+                <span style={{...S.badge(C.amber,C.amberBg)}}>⏳ Pending</span>
+                <button style={{...S.btn(),fontSize:12,padding:"6px 14px"}} onClick={()=>setGradingSub(s)}>Grade →</button>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ═══════════════════════════ MARKING INTERFACE ═══════════════════════════ */
+function MarkingInterface({sub,exam,data,setData,toast,onDone}){
+  const[manualScores,setManualScores]=useState(sub.manualScores||{});
+  const[feedback,setFeedback]=useState(sub.feedback||{});
+  const[aiLoading,setAiLoading]=useState({});
+  const[apiKey,setApiKey]=useState(localStorage.getItem("eduiq_ai_key")||"");
+  const[showKeyInput,setShowKeyInput]=useState(false);
+  const[publishing,setPublishing]=useState(false);
+
+  const autoQs=(exam?.questions||[]).filter(q=>isAutoGradable(q.type));
+  const manualQs=(exam?.questions||[]).filter(q=>isManualType(q.type));
+
+  // Total auto score
+  const autoEarned=sub.autoScored?.earned||0;
+  const autoTotal=sub.autoScored?.total||0;
+
+  // Total manual score entered so far
+  const manualEarned=manualQs.reduce((s,q)=>s+(parseInt(manualScores[q.id])||0),0);
+  const manualTotal=manualQs.reduce((s,q)=>s+(q.marks||1),0);
+
+  const grandTotal=calcTotalMarks(exam?.questions||[]);
+  const grandEarned=autoEarned+manualEarned;
+  const pct=grandTotal>0?Math.round((grandEarned/grandTotal)*100):0;
+  const gr=getGrade(pct);
+
+  async function aiMark(q){
+    if(!apiKey){setShowKeyInput(true);toast("Please enter your Anthropic API key","err");return;}
+    setAiLoading(p=>({...p,[q.id]:true}));
+    const studentAns=sub.answers[q.id]||"";
+    try{
+      const resp=await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",
+        headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01"},
+        body:JSON.stringify({
+          model:"claude-opus-4-5",
+          max_tokens:300,
+          messages:[{role:"user",content:`You are grading a student's answer. Respond ONLY with JSON.
+Question: ${q.text}
+Maximum marks: ${q.marks}
+Expected answer/keywords: ${q.answer||"(open-ended, use your judgment)"}
+Student's answer: ${studentAns}
+Evaluate and respond ONLY with this JSON (no preamble): {"score":number,"feedback":"brief 1-2 sentence feedback"}`}]
+        })
+      });
+      const d=await resp.json();
+      const raw=d.content?.[0]?.text||"{}";
+      const parsed=JSON.parse(raw.replace(/```json|```/g,"").trim());
+      const score=Math.min(q.marks,Math.max(0,parseInt(parsed.score)||0));
+      setManualScores(p=>({...p,[q.id]:score}));
+      setFeedback(p=>({...p,[q.id]:parsed.feedback||""}));
+      toast("AI marked Q: "+score+"/"+q.marks+" marks ✓");
+    }catch(e){
+      toast("AI marking failed. Check API key or answer.","err");
+      console.error(e);
+    }
+    setAiLoading(p=>({...p,[q.id]:false}));
+  }
+
+  async function publishGrade(){
+    // Check all manual questions have been scored
+    const unscored=manualQs.filter(q=>manualScores[q.id]===undefined||manualScores[q.id]==="");
+    if(unscored.length>0){
+      toast(`Please score all ${unscored.length} open-ended question(s) before publishing.`,"err");
+      return;
+    }
+    setPublishing(true);
+    const updatedSub={
+      ...sub,
+      manualScores,
+      feedback,
+      earned:grandEarned,
+      total:grandTotal,
+      pct,
+      status:"graded",
+      gradedAt:now(),
+      gradedBy:"{teacher}",
+    };
+    const updatedSubs=(data.submissions||[]).map(s=>s.id===sub.id?updatedSub:s);
+    setData(d=>({...d,submissions:updatedSubs}));
+    await dsSet("submissions",updatedSubs);
+    toast("Grade published! Student can now see their results ✓");
+    setPublishing(false);
+    onDone();
+  }
+
+  return(
+    <div className="fade-in">
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+        <button onClick={onDone} style={{...S.btn(C.elevated,C.muted),border:"1px solid "+C.border,fontSize:12,padding:"6px 12px"}}>← Back</button>
+        <div>
+          <div style={{fontWeight:800,fontSize:15}}>Grading: {sub.studentName}</div>
+          <div style={{fontSize:11,color:C.muted}}>{exam?.title} · {sub.studentClass}</div>
+        </div>
+      </div>
+
+      {/* Score summary */}
+      <div style={{...S.card,background:"linear-gradient(135deg,"+gr.c+"12,"+gr.c+"05)",border:"1.5px solid "+gr.c+"44"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:2}}>RUNNING TOTAL</div>
+            <div style={{fontSize:28,fontWeight:900,color:gr.c}}>{grandEarned} / {grandTotal}</div>
+            <div style={{fontSize:13,color:C.muted}}>{pct}% — {gr.g} ({gr.l})</div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:11,color:C.muted}}>Auto: {autoEarned}/{autoTotal}</div>
+            <div style={{fontSize:11,color:C.muted}}>Manual: {manualEarned}/{manualTotal}</div>
+          </div>
+        </div>
+        <div style={{marginTop:10,height:6,background:C.border,borderRadius:4}}>
+          <div style={{height:"100%",width:pct+"%",background:gr.c,borderRadius:4,transition:"width .3s"}}/>
+        </div>
+      </div>
+
+      {/* AI API Key setting */}
+      {(showKeyInput||!apiKey)&&manualQs.length>0&&(
+        <div style={{...S.card,border:"1px solid "+C.purple+"44",background:C.purpleBg}}>
+          <div style={{fontWeight:700,fontSize:13,color:C.purple,marginBottom:6}}>🤖 AI Marking — Anthropic API Key</div>
+          <div style={{fontSize:12,color:C.muted,marginBottom:8}}>Enter your Anthropic API key to use AI for marking open-ended questions. It's saved locally in your browser.</div>
+          <div style={{display:"flex",gap:8}}>
+            <input type="password" value={apiKey} onChange={e=>setApiKey(e.target.value)}
+              placeholder="sk-ant-..." style={{flex:1}}/>
+            <button style={{...S.btn(C.purple),fontSize:12,padding:"6px 14px"}}
+              onClick={()=>{localStorage.setItem("eduiq_ai_key",apiKey);setShowKeyInput(false);toast("API key saved ✓");}}>Save</button>
+          </div>
+        </div>
+      )}
+
+      {/* Auto-graded questions */}
+      {autoQs.length>0&&(
+        <div style={S.card}>
+          <div style={{fontWeight:700,marginBottom:2}}>✅ Auto-Graded Questions</div>
+          <div style={{fontSize:12,color:C.muted,marginBottom:12}}>These were automatically scored by the system.</div>
+          {autoQs.map((q,i)=>{
+            const a=sub.answers[q.id];
+            let earned=0;
+            if(q.type==="mcq"||q.type==="fill"){
+              if((a||"").trim().toLowerCase()===(q.answer||"").trim().toLowerCase())earned=q.marks||1;
+            }else if(q.type==="tf"){
+              if((a||"").trim().toLowerCase()===(q.answer||"").trim().toLowerCase())earned=q.marks||1;
+            }else if(q.type==="match"){
+              let pts=0;(q.pairs||[]).forEach(p=>{if((a?.[p.id]||"").trim().toLowerCase()===(p.right||"").trim().toLowerCase())pts+=1;});
+              earned=Math.round(((pts/(q.pairs?.length||1))*(q.marks||1)));
+            }
+            const correct=earned===(q.marks||1);
+            return(
+              <div key={q.id} style={{padding:"10px 12px",borderRadius:9,marginBottom:8,
+                background:correct?C.greenBg:C.redBg,border:"1px solid "+(correct?C.green:C.red)+"33"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:600,fontSize:13,marginBottom:4}}>Q{i+1}. {q.text} <span style={{...S.badge(C.muted,"#f1f5f9"),fontSize:10}}>{q.type==="tf"?"True/False":q.type.toUpperCase()}</span></div>
+                    <div style={{fontSize:12,color:C.muted}}>
+                      Student answered: <strong>{typeof a==="object"?Object.entries(a||{}).map(([k,v])=>v).join(", "):a||"—"}</strong>
+                    </div>
+                    {q.type!=="match"&&<div style={{fontSize:12,color:C.green}}>Correct answer: <strong>{q.answer}</strong></div>}
+                  </div>
+                  <span style={{...S.badge(correct?C.green:C.red,correct?C.greenBg:C.redBg),marginLeft:12,whiteSpace:"nowrap"}}>{earned}/{q.marks||1} mk</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Manual grading questions */}
+      {manualQs.length>0&&(
+        <div style={S.card}>
+          <div style={{fontWeight:700,marginBottom:2}}>📝 Open-Ended Questions</div>
+          <div style={{fontSize:12,color:C.muted,marginBottom:12}}>Assign marks manually or use AI to assist. You can adjust AI suggestions.</div>
+          {manualQs.map((q,i)=>{
+            const studentAns=sub.answers[q.id]||"";
+            const scored=manualScores[q.id]!==undefined&&manualScores[q.id]!=="";
+            return(
+              <div key={q.id} style={{padding:"12px 14px",borderRadius:10,marginBottom:12,
+                background:scored?C.greenBg:"#fff",border:"1.5px solid "+(scored?C.green:C.border)}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:700,fontSize:13}}>
+                      Q{autoQs.length+i+1}. {q.text}
+                      <span style={{...S.badge(q.type==="essay"?C.purple:C.teal,q.type==="essay"?C.purpleBg:C.tealBg),marginLeft:8,fontSize:10}}>{q.type==="essay"?"Essay":"Short Answer"}</span>
+                    </div>
+                    {q.answer&&<div style={{fontSize:11,color:C.muted,marginTop:2}}>Expected: {q.answer}</div>}
+                  </div>
+                  <span style={{...S.badge(C.muted,"#f1f5f9"),marginLeft:8,whiteSpace:"nowrap"}}>/{q.marks||1} mk</span>
+                </div>
+
+                {/* Student answer */}
+                <div style={{padding:"10px 12px",background:C.elevated,borderRadius:8,border:"1px solid "+C.border,marginBottom:10}}>
+                  <div style={{fontSize:10,color:C.faint,marginBottom:4,textTransform:"uppercase",letterSpacing:".5px"}}>Student's Answer</div>
+                  <div style={{fontSize:13,color:C.text,whiteSpace:"pre-wrap",lineHeight:1.6}}>
+                    {studentAns||<span style={{color:C.faint,fontStyle:"italic"}}>No answer provided</span>}
+                  </div>
+                </div>
+
+                {/* AI feedback display */}
+                {feedback[q.id]&&(
+                  <div style={{padding:"8px 12px",background:C.purpleBg,borderRadius:8,border:"1px solid "+C.purple+"33",marginBottom:10}}>
+                    <div style={{fontSize:10,color:C.purple,fontWeight:700,marginBottom:3}}>🤖 AI FEEDBACK</div>
+                    <div style={{fontSize:12,color:C.text}}>{feedback[q.id]}</div>
+                  </div>
+                )}
+
+                {/* Scoring row */}
+                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,flex:1}}>
+                    <div style={{fontSize:12,color:C.muted,whiteSpace:"nowrap"}}>Marks awarded:</div>
+                    <input type="number" min={0} max={q.marks||1}
+                      value={manualScores[q.id]??""} 
+                      onChange={e=>setManualScores(p=>({...p,[q.id]:e.target.value}))}
+                      style={{width:70}} placeholder="0"/>
+                    <div style={{fontSize:12,color:C.muted}}>/ {q.marks||1}</div>
+                  </div>
+                  <button
+                    style={{...S.btn(C.purpleBg,C.purple),fontSize:12,padding:"6px 12px",border:"1px solid "+C.purple+"44",display:"flex",alignItems:"center",gap:5}}
+                    onClick={()=>aiMark(q)} disabled={aiLoading[q.id]}>
+                    {aiLoading[q.id]?<><Spinner/> AI Marking…</>:"🤖 AI Mark"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Publish button */}
+      <div style={{...S.card,border:"1.5px solid "+C.green+"44",background:C.greenBg}}>
+        <div style={{fontWeight:700,fontSize:14,color:C.green,marginBottom:6}}>Ready to Publish?</div>
+        <div style={{fontSize:12,color:C.muted,marginBottom:14}}>
+          Once published, <strong>{sub.studentName}</strong> will see their final grade: <strong style={{color:gr.c}}>{pct}% — {gr.g} ({gr.l})</strong>. This action cannot be undone.
+        </div>
+        {manualQs.length>0&&apiKey&&(
+          <div style={{marginBottom:10}}>
+            <button style={{...S.btn(C.purpleBg,C.purple),width:"100%",marginBottom:8,border:"1px solid "+C.purple+"44",fontSize:12}}
+              onClick={async()=>{
+                for(const q of manualQs){
+                  if(manualScores[q.id]===undefined||manualScores[q.id]===""){
+                    await aiMark(q);
+                  }
+                }
+              }}>
+              🤖 AI Mark All Remaining Open-Ended Questions
+            </button>
+          </div>
+        )}
+        <button style={{...S.btn(C.green),width:"100%",padding:"12px",fontSize:14}} onClick={publishGrade} disabled={publishing}>
+          {publishing?<><Spinner/> Publishing…</>:"🚀 Publish Grade to Student"}
+        </button>
+        {manualQs.length>0&&!apiKey&&(
+          <button style={{...S.btn(C.elevated,C.muted),width:"100%",marginTop:8,border:"1px solid "+C.border,fontSize:12}} onClick={()=>setShowKeyInput(true)}>
+            🔑 Set AI API Key for Auto-Marking
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════ CREATE EXAM ═══════════════════════════ */
+const QTYPES=[
+  {v:"mcq",l:"📋 Multiple Choice"},
+  {v:"tf",l:"✅ True / False"},
+  {v:"fill",l:"✏️ Fill in Blank"},
+  {v:"match",l:"🔗 Matching"},
+  {v:"short",l:"📝 Short Answer"},
+  {v:"essay",l:"📄 Essay / Long Answer"},
+];
+
 function CreateExam({user,data,setData,toast,onDone}){
   const[step,setStep]=useState(1);
   const[meta,setMeta]=useState({title:"",subject:user.subject||"",class:"",instructions:"",timeLimit:"",dueDate:""});
   const[questions,setQuestions]=useState([]);
-  const[adding,setAdding]=useState(null); // current question being built
-
-  const QTYPES=[
-    {v:"mcq",l:"📋 Multiple Choice"},
-    {v:"fill",l:"✏️ Fill in Blank"},
-    {v:"match",l:"🔗 Matching"},
-    {v:"short",l:"📝 Short Answer"},
-  ];
+  const[adding,setAdding]=useState(null);
 
   function addQ(q){
     setQuestions(prev=>[...prev,{...q,id:uid()}]);
@@ -529,15 +856,10 @@ function CreateExam({user,data,setData,toast,onDone}){
     if(!meta.title){toast("Add a title","err");return;}
     if(questions.length===0){toast("Add at least 1 question","err");return;}
     const exam={
-      id:uid(),
-      ...meta,
-      teacherId:user.id,
-      teacherUsername:user.username,
-      teacherName:user.name,
-      questions,
-      status:"published",
-      createdAt:now(),
-      totalMarks:questions.reduce((s,q)=>s+(parseInt(q.marks)||1),0),
+      id:uid(),...meta,
+      teacherId:user.id,teacherUsername:user.username,teacherName:user.name,
+      questions,status:"published",createdAt:now(),
+      totalMarks:calcTotalMarks(questions),
     };
     const updated=[...(data.exams||[]),exam];
     setData(d=>({...d,exams:updated}));
@@ -546,9 +868,11 @@ function CreateExam({user,data,setData,toast,onDone}){
     onDone();
   }
 
+  const typeLabel={mcq:"MCQ",tf:"True/False",fill:"Fill",match:"Match",short:"Short Ans.",essay:"Essay"};
+  const typeColor={mcq:C.accent,tf:C.green,fill:C.blue,match:C.amber,short:C.teal,essay:C.purple};
+
   return(
     <div>
-      {/* Step indicator */}
       <div style={{display:"flex",gap:4,marginBottom:16}}>
         {[1,2,3].map(n=>(
           <div key={n} style={{flex:1,height:4,borderRadius:4,background:step>=n?C.accent:C.border,transition:"background .3s"}}/>
@@ -563,8 +887,7 @@ function CreateExam({user,data,setData,toast,onDone}){
               <div style={{fontSize:11,color:C.muted,marginBottom:4}}>{l}</div>
               {k==="instructions"
                 ?<textarea value={meta[k]} onChange={e=>setMeta({...meta,[k]:e.target.value})} rows={2} style={{...S.inp,resize:"vertical"}} placeholder={l}/>
-                :<input type={t} value={meta[k]} onChange={e=>setMeta({...meta,[k]:e.target.value})} placeholder={l}/>
-              }
+                :<input type={t} value={meta[k]} onChange={e=>setMeta({...meta,[k]:e.target.value})} placeholder={l}/>}
             </div>
           ))}
           <div style={S.g2}>
@@ -593,25 +916,36 @@ function CreateExam({user,data,setData,toast,onDone}){
           <div style={S.card}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
               <div style={{fontWeight:700}}>Step 2: Questions ({questions.length})</div>
-              <div style={{fontSize:12,color:C.muted}}>Total marks: {questions.reduce((s,q)=>s+(parseInt(q.marks)||1),0)}</div>
+              <div style={{fontSize:12,color:C.muted}}>Total: {calcTotalMarks(questions)} marks</div>
             </div>
             {questions.map((q,i)=>(
               <div key={q.id} style={{padding:"8px 10px",borderRadius:8,background:C.elevated,marginBottom:8,border:"1px solid "+C.border}}>
-                <div style={{display:"flex",justifyContent:"space-between"}}>
-                  <span style={{fontWeight:600,fontSize:13}}>Q{i+1}. {q.text}</span>
-                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                    <span style={{...S.badge(C.accent,C.accentLight),fontSize:10}}>{q.marks} mk</span>
-                    <span style={{...S.badge(C.muted,"#f1f5f9"),fontSize:10}}>{q.type}</span>
+                <div style={{display:"flex",justifyContent:"space-between",gap:6}}>
+                  <div style={{flex:1}}>
+                    <span style={{fontWeight:600,fontSize:13}}>Q{i+1}. {q.text}</span>
+                    {isManualType(q.type)&&<span style={{fontSize:10,color:C.amber,marginLeft:6}}>⚠ Teacher-graded</span>}
+                  </div>
+                  <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+                    <span style={{...S.badge(typeColor[q.type]||C.accent,(typeColor[q.type]||C.accent)+"22"),fontSize:10}}>{typeLabel[q.type]||q.type}</span>
+                    <span style={{...S.badge(C.muted,"#f1f5f9"),fontSize:10}}>{q.marks}mk</span>
                     <button onClick={()=>setQuestions(prev=>prev.filter(x=>x.id!==q.id))}
                       style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:14,padding:0}}>✕</button>
                   </div>
                 </div>
               </div>
             ))}
+
+            {/* Note about manual grading */}
+            {questions.some(q=>isManualType(q.type))&&(
+              <div style={{padding:"8px 12px",background:C.amberBg,borderRadius:8,border:"1px solid "+C.amber+"44",marginBottom:10,fontSize:12,color:C.amber}}>
+                ⚠️ This exam contains open-ended questions. Students' submissions will need teacher review before grades are released.
+              </div>
+            )}
+
             {!adding&&(
               <div style={{display:"flex",flexWrap:"wrap",gap:7,marginTop:8}}>
                 {QTYPES.map(qt=>(
-                  <button key={qt.v} style={{...S.btn(C.elevated,C.accent),border:"1px solid "+C.borderAccent,fontSize:12}} onClick={()=>setAdding(qt.v)}>{qt.l}</button>
+                  <button key={qt.v} style={{...S.btn(C.elevated,C.accent),border:"1px solid "+C.borderAccent,fontSize:11}} onClick={()=>setAdding(qt.v)}>{qt.l}</button>
                 ))}
               </div>
             )}
@@ -628,15 +962,19 @@ function CreateExam({user,data,setData,toast,onDone}){
         <div style={S.card}>
           <div style={{fontWeight:700,marginBottom:14}}>Step 3: Review & Publish</div>
           <div style={{padding:"12px 14px",background:C.elevated,borderRadius:10,marginBottom:14,border:"1px solid "+C.border}}>
-            <div style={{fontSize:15,fontWeight:800,color:C.text,marginBottom:4}}>{meta.title}</div>
-            <div style={{fontSize:12,color:C.muted}}>{meta.subject} · {meta.class||"All classes"} · {questions.length} questions · {questions.reduce((s,q)=>s+(parseInt(q.marks)||1),0)} total marks</div>
+            <div style={{fontSize:15,fontWeight:800,marginBottom:4}}>{meta.title}</div>
+            <div style={{fontSize:12,color:C.muted}}>{meta.subject} · {meta.class||"All classes"} · {questions.length} questions · {calcTotalMarks(questions)} total marks</div>
             {meta.timeLimit&&<div style={{fontSize:12,color:C.amber,marginTop:4}}>⏱ {meta.timeLimit} minutes</div>}
+            {examHasManual({questions})&&(
+              <div style={{fontSize:12,color:C.purple,marginTop:4}}>📝 Contains open-ended questions — requires teacher grading</div>
+            )}
           </div>
           {questions.map((q,i)=>(
             <div key={q.id} style={{padding:"8px 0",borderBottom:"1px solid "+C.border,fontSize:13}}>
               <span style={{color:C.muted,marginRight:6}}>Q{i+1}.</span>
               <span style={{fontWeight:600}}>{q.text}</span>
-              <span style={{color:C.accent,fontSize:11,marginLeft:8}}>[{q.marks} mark{q.marks>1?"s":""}]</span>
+              <span style={{...S.badge(typeColor[q.type]||C.accent,(typeColor[q.type]||C.accent)+"22"),marginLeft:8,fontSize:10}}>{typeLabel[q.type]||q.type}</span>
+              <span style={{color:C.accent,fontSize:11,marginLeft:6}}>[{q.marks} mark{q.marks>1?"s":""}]</span>
             </div>
           ))}
           <div style={{display:"flex",gap:10,marginTop:14}}>
@@ -649,7 +987,7 @@ function CreateExam({user,data,setData,toast,onDone}){
   );
 }
 
-/* ─── Question Builder ─── */
+/* ═══════════════════════════ QUESTION BUILDER ═══════════════════════════ */
 function QuestionBuilder({type,onAdd,onCancel}){
   const[text,setText]=useState("");
   const[marks,setMarks]=useState(1);
@@ -657,19 +995,22 @@ function QuestionBuilder({type,onAdd,onCancel}){
   const[options,setOptions]=useState(["","","",""]);
   const[pairs,setPairs]=useState([{id:uid(),left:"",right:""},{id:uid(),left:"",right:""}]);
 
+  const typeLabels={mcq:"Multiple Choice",tf:"True / False",fill:"Fill in Blank",match:"Matching",short:"Short Answer",essay:"Essay / Long Answer"};
+  const isOpenEnded=type==="short"||type==="essay";
+
   function submit(){
-    if(!text.trim()){return;}
+    if(!text.trim())return;
     const base={type,text:text.trim(),marks:parseInt(marks)||1};
     if(type==="mcq") onAdd({...base,options:options.filter(Boolean),answer});
-    else if(type==="fill"||type==="short") onAdd({...base,answer});
+    else if(type==="tf") onAdd({...base,answer});
+    else if(type==="fill") onAdd({...base,answer});
+    else if(type==="short"||type==="essay") onAdd({...base,answer}); // answer = expected keywords/notes
     else if(type==="match") onAdd({...base,pairs,answer:""});
   }
 
   return(
     <div style={{marginTop:12,padding:"12px 14px",background:C.accentLight,borderRadius:10,border:"1px dashed "+C.borderAccent}}>
-      <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:C.accent}}>
-        {type==="mcq"?"Multiple Choice":type==="fill"?"Fill in Blank":type==="match"?"Matching":"Short Answer"}
-      </div>
+      <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:C.accent}}>{typeLabels[type]||type}</div>
       <div style={{marginBottom:8}}>
         <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Question Text</div>
         <textarea value={text} onChange={e=>setText(e.target.value)} rows={2} placeholder="Enter question…" style={{...S.inp,resize:"vertical"}}/>
@@ -678,7 +1019,7 @@ function QuestionBuilder({type,onAdd,onCancel}){
       {type==="mcq"&&(
         <>
           <div style={{marginBottom:8}}>
-            <div style={{fontSize:11,color:C.muted,marginBottom:6}}>Options (4)</div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:6}}>Options</div>
             {options.map((o,i)=>(
               <div key={i} style={{display:"flex",gap:6,marginBottom:5,alignItems:"center"}}>
                 <span style={{fontSize:11,color:C.muted,width:16}}>{String.fromCharCode(65+i)}.</span>
@@ -696,10 +1037,30 @@ function QuestionBuilder({type,onAdd,onCancel}){
         </>
       )}
 
-      {(type==="fill"||type==="short")&&(
+      {type==="tf"&&(
         <div style={{marginBottom:8}}>
-          <div style={{fontSize:11,color:C.muted,marginBottom:4}}>{type==="short"?"Keywords (comma-separated)":"Correct Answer"}</div>
-          <input value={answer} onChange={e=>setAnswer(e.target.value)} placeholder={type==="short"?"e.g. photosynthesis, chlorophyll":"Exact answer"}/>
+          <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Correct Answer</div>
+          <select value={answer} onChange={e=>setAnswer(e.target.value)}>
+            <option value="">Select…</option>
+            <option value="True">True</option>
+            <option value="False">False</option>
+          </select>
+        </div>
+      )}
+
+      {type==="fill"&&(
+        <div style={{marginBottom:8}}>
+          <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Correct Answer</div>
+          <input value={answer} onChange={e=>setAnswer(e.target.value)} placeholder="Exact answer"/>
+        </div>
+      )}
+
+      {isOpenEnded&&(
+        <div style={{marginBottom:8}}>
+          <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Expected Answer / Marking Notes <span style={{color:C.amber}}>(for teacher & AI reference)</span></div>
+          <textarea value={answer} onChange={e=>setAnswer(e.target.value)} rows={2}
+            placeholder="Key points, keywords, or model answer…" style={{...S.inp,resize:"vertical"}}/>
+          <div style={{fontSize:10,color:C.amber,marginTop:4}}>⚠️ This question will require manual or AI marking. Students won't see results until you publish grades.</div>
         </div>
       )}
 
@@ -744,17 +1105,24 @@ function ExamList({exams,data,setData,toast,isTeacher}){
     <div>
       {exams.map(exam=>{
         const subs=(data.submissions||[]).filter(s=>s.examId===exam.id);
-        const avg=subs.length>0?Math.round(subs.reduce((s,sub)=>s+(sub.pct||0),0)/subs.length):null;
+        const gradedSubs=subs.filter(s=>s.status==="graded");
+        const pendingSubs=subs.filter(s=>s.status==="pending");
+        const avg=gradedSubs.length>0?Math.round(gradedSubs.reduce((s,sub)=>s+(sub.pct||0),0)/gradedSubs.length):null;
         return(
           <div key={exam.id} style={S.card}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
               <div style={{flex:1}}>
-                <div style={{fontWeight:800,fontSize:14,color:C.text}}>{exam.title}</div>
+                <div style={{fontWeight:800,fontSize:14}}>{exam.title}</div>
                 <div style={{fontSize:11,color:C.muted,marginTop:2}}>{exam.subject} · {exam.class||"All"} · {exam.questions?.length||0} Qs · {exam.totalMarks} marks</div>
                 {exam.dueDate&&<div style={{fontSize:11,color:C.amber,marginTop:2}}>Due: {exam.dueDate}</div>}
+                <div style={{marginTop:4,display:"flex",gap:6,flexWrap:"wrap"}}>
+                  {examHasManual(exam)&&<span style={{...S.badge(C.purple,C.purpleBg),fontSize:10}}>📝 Has Open-Ended</span>}
+                  {exam.questions?.some(q=>q.type==="tf")&&<span style={{...S.badge(C.green,C.greenBg),fontSize:10}}>✅ Has T/F</span>}
+                </div>
               </div>
-              <div style={{textAlign:"right"}}>
-                <div style={{...S.badge(C.green,C.greenBg),marginBottom:4}}>{subs.length} submissions</div>
+              <div style={{textAlign:"right",display:"flex",flexDirection:"column",gap:4}}>
+                {pendingSubs.length>0&&<span style={{...S.badge(C.amber,C.amberBg)}}>⏳ {pendingSubs.length} pending</span>}
+                <span style={{...S.badge(C.green,C.greenBg)}}>{gradedSubs.length} graded</span>
                 {avg!==null&&<div style={{fontSize:11,color:C.muted}}>Avg: {avg}%</div>}
               </div>
             </div>
@@ -770,9 +1138,7 @@ function ExamList({exams,data,setData,toast,isTeacher}){
   );
 }
 
-/* ═══════════════════════════════════════════════
-   STUDENT DASHBOARD
-═══════════════════════════════════════════════ */
+/* ═══════════════════════════ STUDENT DASHBOARD ═══════════════════════════ */
 function StudentDash({user,data,setData,toast}){
   const[tab,setTab]=useState("overview");
   const[takingExam,setTakingExam]=useState(null);
@@ -783,6 +1149,8 @@ function StudentDash({user,data,setData,toast}){
   const mySubmissions=(data.submissions||[]).filter(s=>s.studentId===user.id||s.studentUsername===user.username);
   const submittedIds=new Set(mySubmissions.map(s=>s.examId));
   const pending=availableExams.filter(e=>!submittedIds.has(e.id));
+  const awaitingReview=mySubmissions.filter(s=>s.status==="pending");
+  const graded=mySubmissions.filter(s=>s.status==="graded");
 
   const tabs=[["overview","📊 Overview"],["exams","📝 My Exams"],["results","🏆 My Results"],["resources","📚 Resources"]];
 
@@ -799,13 +1167,13 @@ function StudentDash({user,data,setData,toast}){
       {tab==="overview"&&(
         <div>
           <div style={S.g3}>
-            {[{l:"Available",v:pending.length,c:C.amber},{l:"Completed",v:mySubmissions.length,c:C.green},{l:"Resources",v:(data.resources||[]).length,c:C.accent}].map(s=>(
+            {[{l:"To Do",v:pending.length,c:C.amber},{l:"Awaiting",v:awaitingReview.length,c:C.purple},{l:"Graded",v:graded.length,c:C.green}].map(s=>(
               <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
             ))}
           </div>
           {pending.length>0&&(
             <div style={{...S.card,border:"1.5px solid "+C.amber+"66",background:C.amberBg}}>
-              <div style={{fontWeight:700,color:C.amber,marginBottom:8}}>⏰ Pending Exams</div>
+              <div style={{fontWeight:700,color:C.amber,marginBottom:8}}>⏰ Exams to Take</div>
               {pending.map(e=>(
                 <div key={e.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid "+C.border}}>
                   <div>
@@ -817,11 +1185,28 @@ function StudentDash({user,data,setData,toast}){
               ))}
             </div>
           )}
+          {awaitingReview.length>0&&(
+            <div style={{...S.card,border:"1.5px solid "+C.purple+"66",background:C.purpleBg}}>
+              <div style={{fontWeight:700,color:C.purple,marginBottom:8}}>⏳ Awaiting Teacher Review</div>
+              {awaitingReview.map(s=>{
+                const exam=(data.exams||[]).find(e=>e.id===s.examId);
+                return(
+                  <div key={s.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid "+C.border}}>
+                    <div>
+                      <div style={{fontWeight:600,fontSize:13}}>{exam?.title||"Exam"}</div>
+                      <div style={{fontSize:11,color:C.muted}}>Submitted {s.submittedAt?.slice(0,10)}</div>
+                    </div>
+                    <span style={{...S.badge(C.purple,C.purpleBg)}}>Pending Review</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
           <AnnouncementsPanel data={data} role="students"/>
-          {mySubmissions.length>0&&(
+          {graded.length>0&&(
             <div style={S.card}>
               <div style={{fontWeight:700,marginBottom:10}}>Recent Results</div>
-              {mySubmissions.slice(-3).reverse().map(s=>{
+              {graded.slice(-3).reverse().map(s=>{
                 const exam=(data.exams||[]).find(e=>e.id===s.examId);
                 const gr=getGrade(s.pct||0);
                 return(
@@ -845,23 +1230,28 @@ function StudentDash({user,data,setData,toast}){
           {availableExams.map(e=>{
             const done=submittedIds.has(e.id);
             const sub=mySubmissions.find(s=>s.examId===e.id);
-            const gr=done?getGrade(sub?.pct||0):null;
+            const isGraded=sub?.status==="graded";
+            const gr=isGraded?getGrade(sub?.pct||0):null;
             return(
-              <div key={e.id} style={{...S.card,opacity:done?.7:1}}>
+              <div key={e.id} style={{...S.card,opacity:done?.8:1}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                   <div>
                     <div style={{fontWeight:800,fontSize:14}}>{e.title}</div>
                     <div style={{fontSize:11,color:C.muted,marginTop:2}}>{e.subject} · {e.questions?.length} questions · {e.totalMarks} marks</div>
                     {e.timeLimit&&<div style={{fontSize:11,color:C.amber,marginTop:2}}>⏱ {e.timeLimit} min</div>}
                     {e.dueDate&&<div style={{fontSize:11,color:C.red,marginTop:2}}>Due: {e.dueDate}</div>}
+                    {examHasManual(e)&&<div style={{fontSize:11,color:C.purple,marginTop:2}}>📝 Includes open-ended questions</div>}
                   </div>
-                  {done
-                    ?<div style={{textAlign:"right"}}>
-                      <div style={{fontWeight:800,color:gr.c,fontSize:16}}>{sub.pct}%</div>
-                      <div style={{...S.badge(gr.c,gr.c+"22")}}>{gr.g} · {gr.l}</div>
-                    </div>
-                    :<button style={{...S.btn(),fontSize:12}} onClick={()=>setTakingExam(e)}>Start Exam →</button>
-                  }
+                  <div style={{textAlign:"right",marginLeft:10}}>
+                    {!done&&<button style={{...S.btn(),fontSize:12}} onClick={()=>setTakingExam(e)}>Start Exam →</button>}
+                    {done&&!isGraded&&<span style={{...S.badge(C.purple,C.purpleBg)}}>⏳ Awaiting<br/>Teacher Review</span>}
+                    {isGraded&&(
+                      <div>
+                        <div style={{fontWeight:800,color:gr.c,fontSize:16}}>{sub.pct}%</div>
+                        <div style={{...S.badge(gr.c,gr.c+"22")}}>{gr.g} · {gr.l}</div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -875,11 +1265,10 @@ function StudentDash({user,data,setData,toast}){
   );
 }
 
-/* ─── Exam Interface ─── */
+/* ═══════════════════════════ EXAM INTERFACE ═══════════════════════════ */
 function ExamInterface({exam,user,data,setData,toast,onDone}){
   const[answers,setAnswers]=useState({});
   const[submitted,setSubmitted]=useState(false);
-  const[result,setResult]=useState(null);
   const[timeLeft,setTimeLeft]=useState(exam.timeLimit?parseInt(exam.timeLimit)*60:null);
   const[current,setCurrent]=useState(0);
 
@@ -896,18 +1285,31 @@ function ExamInterface({exam,user,data,setData,toast,onDone}){
 
   async function submit(auto=false){
     if(submitted)return;
-    const res=calcScore(answers,exam.questions);
+    // Calculate auto scores
+    const autoScore=calcAutoScore(answers,exam.questions);
+    const totalMarks=calcTotalMarks(exam.questions);
+    const hasManual=examHasManual(exam);
+
     const sub={
       id:uid(),examId:exam.id,
       studentId:user.id,studentUsername:user.username,studentName:user.name,
       studentClass:user.class||"",
-      answers,earned:res.earned,total:res.total,pct:res.pct,
-      submittedAt:now(),auto:!!auto,
+      answers,
+      autoScored:{earned:autoScore.earned,total:autoScore.total},
+      manualScores:{},
+      feedback:{},
+      // If no manual questions, auto-grade immediately
+      status:hasManual?"pending":"graded",
+      earned:hasManual?null:autoScore.earned,
+      total:totalMarks,
+      pct:hasManual?null:autoScore.total>0?Math.round((autoScore.earned/totalMarks)*100):0,
+      submittedAt:now(),
+      gradedAt:hasManual?null:now(),
+      auto:!!auto,
     };
     const updated=[...(data.submissions||[]),sub];
     setData(d=>({...d,submissions:updated}));
-    dsSet("submissions",updated);
-    setResult({...res,sub});
+    await dsSet("submissions",updated);
     setSubmitted(true);
     toast(auto?"Time up! Auto-submitted":"Exam submitted ✓");
   }
@@ -916,47 +1318,37 @@ function ExamInterface({exam,user,data,setData,toast,onDone}){
   const total=exam.questions.length;
   const answered=Object.keys(answers).length;
   const pct=Math.round((answered/total)*100);
+  const hasManual=examHasManual(exam);
 
-  if(submitted&&result){
-    const gr=getGrade(result.pct);
+  if(submitted){
     return(
       <div className="fade-in">
-        <div style={{...S.card,textAlign:"center",padding:32,border:"2px solid "+gr.c+"44",background:gr.c+"0a"}}>
-          <div style={{fontSize:48,marginBottom:8}}>{result.pct>=50?"🎉":"😔"}</div>
-          <div style={{fontSize:32,fontWeight:900,color:gr.c}}>{result.pct}%</div>
-          <div style={{fontSize:20,fontWeight:700,color:C.text,marginBottom:4}}>{gr.g} — {gr.l}</div>
-          <div style={{color:C.muted,marginBottom:20}}>{result.earned} / {result.total} marks · {exam.questions.length} questions</div>
-          <div style={S.g3}>
-            {[{l:"Score",v:result.earned+"/"+result.total,c:gr.c},{l:"Percentage",v:result.pct+"%",c:gr.c},{l:"Grade",v:gr.g,c:gr.c}].map(s=>(
-              <div key={s.l} style={{...S.stat,textAlign:"center"}}>
-                <div style={S.sl}>{s.l}</div>
-                <div style={{...S.sv,color:s.c,fontSize:18}}>{s.v}</div>
-              </div>
-            ))}
+        <div style={{...S.card,textAlign:"center",padding:32,
+          border:hasManual?"2px solid "+C.purple+"44":"2px solid "+C.green+"44",
+          background:hasManual?C.purpleBg:C.greenBg}}>
+          <div style={{fontSize:48,marginBottom:12}}>{hasManual?"📬":"🎉"}</div>
+          <div style={{fontSize:22,fontWeight:900,color:hasManual?C.purple:C.green,marginBottom:8}}>
+            {hasManual?"Exam Submitted!":"Exam Submitted!"}
           </div>
-          <button style={{...S.btn(),padding:"11px 32px"}} onClick={onDone}>← Back to Dashboard</button>
-        </div>
-
-        {/* Review answers */}
-        <div style={S.card}>
-          <div style={{fontWeight:700,marginBottom:12}}>Answer Review</div>
-          {exam.questions.map((q,i)=>{
-            const a=answers[q.id];
-            const correct=q.type==="mcq"||q.type==="fill"
-              ?(a||"").trim().toLowerCase()===(q.answer||"").trim().toLowerCase()
-              :true;
-            return(
-              <div key={q.id} style={{padding:"8px 10px",borderRadius:8,marginBottom:6,
-                background:correct?C.greenBg:C.redBg,border:"1px solid "+(correct?C.green:C.red)+"33"}}>
-                <div style={{fontSize:13,fontWeight:600,marginBottom:4}}>Q{i+1}. {q.text}</div>
-                <div style={{fontSize:12}}>
-                  <span style={{color:C.muted}}>Your answer: </span>
-                  <span style={{fontWeight:600,color:correct?C.green:C.red}}>{typeof a==="object"?JSON.stringify(a):a||"—"}</span>
-                  {!correct&&<><span style={{color:C.muted}}> · Correct: </span><span style={{color:C.green,fontWeight:600}}>{q.answer}</span></>}
-                </div>
+          {hasManual?(
+            <>
+              <div style={{fontSize:14,color:C.text,marginBottom:8,fontWeight:600}}>Your exam has been sent to your teacher for review.</div>
+              <div style={{fontSize:12,color:C.muted,marginBottom:20,lineHeight:1.7}}>
+                This exam includes open-ended questions that need to be marked by your teacher.<br/>
+                You will be able to see your results once your teacher publishes your grade.<br/>
+                Check your <strong>Results</strong> tab later.
               </div>
-            );
-          })}
+              <div style={{...S.badge(C.purple,C.purpleBg),padding:"6px 18px",fontSize:12}}>⏳ Awaiting Teacher Review</div>
+            </>
+          ):(
+            <>
+              <div style={{fontSize:13,color:C.muted,marginBottom:20}}>Your exam has been automatically graded. Check your results!</div>
+              <div style={{...S.badge(C.green,C.greenBg),padding:"6px 18px",fontSize:12}}>✅ Auto-Graded</div>
+            </>
+          )}
+          <div style={{marginTop:24}}>
+            <button style={{...S.btn(),padding:"11px 32px"}} onClick={onDone}>← Back to Dashboard</button>
+          </div>
         </div>
       </div>
     );
@@ -964,7 +1356,6 @@ function ExamInterface({exam,user,data,setData,toast,onDone}){
 
   return(
     <div className="fade-in">
-      {/* Header */}
       <div style={{...S.card,marginBottom:12}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
@@ -980,7 +1371,6 @@ function ExamInterface({exam,user,data,setData,toast,onDone}){
             </div>
           )}
         </div>
-        {/* Progress */}
         <div style={{marginTop:10}}>
           <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.muted,marginBottom:3}}>
             <span>{answered} answered</span><span>{pct}%</span>
@@ -989,23 +1379,28 @@ function ExamInterface({exam,user,data,setData,toast,onDone}){
             <div style={{height:"100%",width:pct+"%",background:C.accent,borderRadius:4,transition:"width .3s"}}/>
           </div>
         </div>
-        {/* Q navigator */}
         <div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:10}}>
-          {exam.questions.map((q,i)=>(
-            <button key={i} onClick={()=>setCurrent(i)}
-              style={{width:28,height:28,borderRadius:6,border:"1px solid "+(answers[q.id]?C.accent:C.border),
-                background:i===current?C.accent:answers[q.id]?C.accentLight:C.elevated,
-                color:i===current?"#fff":C.text,fontSize:11,fontWeight:700,cursor:"pointer"}}>
-              {i+1}
-            </button>
-          ))}
+          {exam.questions.map((q,i)=>{
+            const isManual=isManualType(q.type);
+            return(
+              <button key={i} onClick={()=>setCurrent(i)}
+                style={{width:28,height:28,borderRadius:6,border:"1px solid "+(answers[q.id]?C.accent:isManual?C.purple+"66":C.border),
+                  background:i===current?C.accent:answers[q.id]?C.accentLight:isManual?C.purpleBg:C.elevated,
+                  color:i===current?"#fff":C.text,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+                {i+1}
+              </button>
+            );
+          })}
         </div>
+        {hasManual&&(
+          <div style={{marginTop:8,fontSize:11,color:C.purple}}>
+            📝 Purple questions are open-ended — your teacher will grade those manually.
+          </div>
+        )}
       </div>
 
-      {/* Question */}
       {q&&<QuestionCard q={q} idx={current} answer={answers[q.id]} onChange={a=>setAnswers(prev=>({...prev,[q.id]:a}))}/>}
 
-      {/* Navigation */}
       <div style={{display:"flex",gap:10,marginTop:12}}>
         <button style={{...S.btn(C.elevated,C.muted),flex:1,border:"1px solid "+C.border}} disabled={current===0} onClick={()=>setCurrent(c=>c-1)}>← Prev</button>
         {current<total-1
@@ -1019,15 +1414,20 @@ function ExamInterface({exam,user,data,setData,toast,onDone}){
 }
 
 function QuestionCard({q,idx,answer,onChange}){
+  const isManual=isManualType(q.type);
   return(
-    <div style={S.card}>
-      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:4}}>
+    <div style={{...S.card,border:"1.5px solid "+(isManual?C.purple+"44":C.border),background:isManual?C.purpleBg+"50":"#fff"}}>
+      <div style={{fontSize:13,fontWeight:700,marginBottom:4}}>
         Q{idx+1}. {q.text}
-        <span style={{...S.badge(C.accent,C.accentLight),marginLeft:8}}>{q.marks} mark{q.marks>1?"s":""}</span>
+        <span style={{...S.badge(C.accent,C.accentLight),marginLeft:8,fontSize:10}}>{q.marks} mark{q.marks>1?"s":""}</span>
+        {q.type==="tf"&&<span style={{...S.badge(C.green,C.greenBg),marginLeft:4,fontSize:10}}>True/False</span>}
+        {q.type==="essay"&&<span style={{...S.badge(C.purple,C.purpleBg),marginLeft:4,fontSize:10}}>Essay</span>}
+        {q.type==="short"&&<span style={{...S.badge(C.teal,C.tealBg),marginLeft:4,fontSize:10}}>Short Answer</span>}
       </div>
+      {isManual&&<div style={{fontSize:11,color:C.purple,marginBottom:10}}>📝 This answer will be reviewed and graded by your teacher.</div>}
 
       {q.type==="mcq"&&(
-        <div style={{marginTop:10}}>
+        <div style={{marginTop:8}}>
           {(q.options||[]).map((opt,i)=>(
             <label key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderRadius:8,
               marginBottom:6,cursor:"pointer",
@@ -1041,13 +1441,35 @@ function QuestionCard({q,idx,answer,onChange}){
         </div>
       )}
 
+      {q.type==="tf"&&(
+        <div style={{display:"flex",gap:12,marginTop:10}}>
+          {["True","False"].map(opt=>(
+            <label key={opt} style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:8,
+              padding:"12px",borderRadius:10,cursor:"pointer",
+              background:answer===opt?(opt==="True"?C.greenBg:C.redBg):C.elevated,
+              border:"2px solid "+(answer===opt?(opt==="True"?C.green:C.red):C.border),
+              transition:"all .15s"}}>
+              <input type="radio" name={"q_"+q.id} checked={answer===opt} onChange={()=>onChange(opt)} style={{width:"auto",border:"none"}}/>
+              <span style={{fontWeight:700,fontSize:14,color:answer===opt?(opt==="True"?C.green:C.red):C.muted}}>
+                {opt==="True"?"✓ True":"✗ False"}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+
       {q.type==="fill"&&(
         <input value={answer||""} onChange={e=>onChange(e.target.value)} placeholder="Type your answer here…" style={{marginTop:10}}/>
       )}
 
       {q.type==="short"&&(
         <textarea value={answer||""} onChange={e=>onChange(e.target.value)} rows={3}
-          placeholder="Write your answer…" style={{...S.inp,marginTop:10,resize:"vertical"}}/>
+          placeholder="Write a brief answer…" style={{...S.inp,marginTop:10,resize:"vertical"}}/>
+      )}
+
+      {q.type==="essay"&&(
+        <textarea value={answer||""} onChange={e=>onChange(e.target.value)} rows={6}
+          placeholder="Write your detailed answer here…" style={{...S.inp,marginTop:10,resize:"vertical"}}/>
       )}
 
       {q.type==="match"&&(
@@ -1069,36 +1491,59 @@ function QuestionCard({q,idx,answer,onChange}){
 /* ─── Student Results ─── */
 function StudentResults({submissions,data}){
   if(submissions.length===0)return<div style={{...S.card,textAlign:"center",color:C.faint,padding:40}}>No results yet. Complete an exam to see your scores!</div>;
-  const avg=Math.round(submissions.reduce((s,sub)=>s+(sub.pct||0),0)/submissions.length);
-  const best=Math.max(...submissions.map(s=>s.pct||0));
+  const graded=submissions.filter(s=>s.status==="graded");
+  const avg=graded.length>0?Math.round(graded.reduce((s,sub)=>s+(sub.pct||0),0)/graded.length):0;
+  const best=graded.length>0?Math.max(...graded.map(s=>s.pct||0)):0;
   return(
     <div>
       <div style={S.g3}>
-        {[{l:"Exams Done",v:submissions.length,c:C.accent},{l:"Average",v:avg+"%",c:getGrade(avg).c},{l:"Best Score",v:best+"%",c:C.green}].map(s=>(
+        {[{l:"Submitted",v:submissions.length,c:C.accent},{l:"Graded",v:graded.length,c:C.green},{l:"Best Score",v:graded.length>0?best+"%":"—",c:C.green}].map(s=>(
           <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
         ))}
       </div>
       {submissions.slice().reverse().map(sub=>{
         const exam=(data.exams||[]).find(e=>e.id===sub.examId);
-        const gr=getGrade(sub.pct||0);
+        const isGraded=sub.status==="graded";
+        const gr=isGraded?getGrade(sub.pct||0):null;
         return(
-          <div key={sub.id} style={S.card}>
+          <div key={sub.id} style={{...S.card,border:"1px solid "+(isGraded?gr.c+"33":C.purple+"44")}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
               <div>
                 <div style={{fontWeight:700,fontSize:14}}>{exam?.title||"Exam"}</div>
-                <div style={{fontSize:11,color:C.muted}}>{exam?.subject||""} · {sub.submittedAt?.slice(0,10)}</div>
+                <div style={{fontSize:11,color:C.muted}}>{exam?.subject||""} · Submitted {sub.submittedAt?.slice(0,10)}</div>
+                {isGraded&&sub.gradedAt&&<div style={{fontSize:11,color:C.green}}>Graded {sub.gradedAt?.slice(0,10)}</div>}
               </div>
               <div style={{textAlign:"right"}}>
-                <div style={{fontSize:22,fontWeight:900,color:gr.c}}>{sub.pct}%</div>
-                <div style={{...S.badge(gr.c,gr.c+"22")}}>{gr.g} — {gr.l}</div>
+                {isGraded?(
+                  <>
+                    <div style={{fontSize:22,fontWeight:900,color:gr.c}}>{sub.pct}%</div>
+                    <div style={{...S.badge(gr.c,gr.c+"22")}}>{gr.g} — {gr.l}</div>
+                  </>
+                ):(
+                  <span style={{...S.badge(C.purple,C.purpleBg)}}>⏳ Awaiting Teacher</span>
+                )}
               </div>
             </div>
-            <div style={{marginTop:10}}>
-              <div style={{height:6,background:C.border,borderRadius:4}}>
-                <div style={{height:"100%",width:sub.pct+"%",background:gr.c,borderRadius:4}}/>
+            {isGraded&&(
+              <div style={{marginTop:10}}>
+                <div style={{height:6,background:C.border,borderRadius:4}}>
+                  <div style={{height:"100%",width:sub.pct+"%",background:gr.c,borderRadius:4}}/>
+                </div>
+                <div style={{fontSize:11,color:C.muted,marginTop:4}}>{sub.earned}/{sub.total} marks</div>
               </div>
-              <div style={{fontSize:11,color:C.muted,marginTop:4}}>{sub.earned}/{sub.total} marks</div>
-            </div>
+            )}
+            {/* Show AI feedback if any */}
+            {isGraded&&sub.feedback&&Object.keys(sub.feedback).length>0&&(
+              <div style={{marginTop:10,padding:"8px 12px",background:C.purpleBg,borderRadius:8,border:"1px solid "+C.purple+"33"}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.purple,marginBottom:4}}>📝 TEACHER FEEDBACK</div>
+                {Object.entries(sub.feedback).map(([qid,fb])=>{
+                  const q=(exam?.questions||[]).find(q=>q.id===qid);
+                  return fb?(<div key={qid} style={{fontSize:12,color:C.text,marginBottom:4}}>
+                    <strong>{q?.text?.slice(0,40)||"Q"}:</strong> {fb}
+                  </div>):null;
+                })}
+              </div>
+            )}
           </div>
         );
       })}
@@ -1106,21 +1551,14 @@ function StudentResults({submissions,data}){
   );
 }
 
-/* ═══════════════════════════════════════════════
-   RESULTS VIEW (Teacher / Admin)
-═══════════════════════════════════════════════ */
+/* ═══════════════════════════ RESULTS VIEW (Teacher/Admin) ═══════════════════════════ */
 function ResultsView({data,users,myExams,isAdmin}){
   const exams=myExams||(data.exams||[]);
   const[selExam,setSelExam]=useState("");
-  const subs=(data.submissions||[]).filter(s=>selExam?s.examId===selExam:true);
+  const allSubs=(data.submissions||[]).filter(s=>selExam?s.examId===selExam:true);
+  const gradedSubs=allSubs.filter(s=>s.status==="graded");
+  const pendingSubs=allSubs.filter(s=>s.status==="pending");
   const exam=exams.find(e=>e.id===selExam);
-
-  const classGroups={};
-  subs.forEach(s=>{
-    const cl=s.studentClass||"Unknown";
-    if(!classGroups[cl])classGroups[cl]=[];
-    classGroups[cl].push(s);
-  });
 
   return(
     <div>
@@ -1132,50 +1570,54 @@ function ResultsView({data,users,myExams,isAdmin}){
         </select>
       </div>
 
-      {subs.length===0&&<div style={{...S.card,color:C.faint,textAlign:"center",padding:32}}>No submissions {selExam?"for this exam":"yet"}.</div>}
+      {pendingSubs.length>0&&(
+        <div style={{...S.card,border:"1.5px solid "+C.amber+"44",background:C.amberBg}}>
+          <div style={{fontWeight:700,color:C.amber}}>⏳ {pendingSubs.length} Submission{pendingSubs.length>1?"s":""} Awaiting Grading</div>
+          <div style={{fontSize:12,color:C.muted,marginTop:4}}>These have been submitted but not yet graded. Go to the Grading tab to review them.</div>
+        </div>
+      )}
 
-      {subs.length>0&&(
+      {gradedSubs.length===0&&<div style={{...S.card,color:C.faint,textAlign:"center",padding:32}}>No graded submissions {selExam?"for this exam":"yet"}.</div>}
+
+      {gradedSubs.length>0&&(
         <>
           <div style={S.g3}>
             {[
-              {l:"Submissions",v:subs.length,c:C.accent},
-              {l:"Average Score",v:Math.round(subs.reduce((s,x)=>s+(x.pct||0),0)/subs.length)+"%",c:C.blue},
-              {l:"Pass Rate",v:Math.round((subs.filter(s=>s.pct>=50).length/subs.length)*100)+"%",c:C.green},
+              {l:"Graded",v:gradedSubs.length,c:C.accent},
+              {l:"Average Score",v:Math.round(gradedSubs.reduce((s,x)=>s+(x.pct||0),0)/gradedSubs.length)+"%",c:C.blue},
+              {l:"Pass Rate",v:Math.round((gradedSubs.filter(s=>s.pct>=50).length/gradedSubs.length)*100)+"%",c:C.green},
             ].map(s=>(
               <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
             ))}
           </div>
-
           <div style={S.card}>
-            <div style={{fontWeight:700,marginBottom:10}}>
-              {exam?exam.title+" — Results":"All Results"}
-            </div>
+            <div style={{fontWeight:700,marginBottom:10}}>{exam?exam.title+" — Results":"All Graded Results"}</div>
             <div style={{overflowX:"auto"}}>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                 <thead>
                   <tr style={{background:C.elevated}}>
-                    {["Student","Class","Score","Grade","Date"].map(h=>(
+                    {["Student","Class","Score","Grade","Graded"].map(h=>(
                       <th key={h} style={{padding:"8px 10px",textAlign:"left",color:C.muted,fontWeight:700,borderBottom:"1px solid "+C.border,fontSize:11,textTransform:"uppercase",letterSpacing:".5px"}}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {subs.slice().sort((a,b)=>(b.pct||0)-(a.pct||0)).map((s,i)=>{
+                  {gradedSubs.slice().sort((a,b)=>(b.pct||0)-(a.pct||0)).map((s,i)=>{
                     const gr=getGrade(s.pct||0);
                     return(
                       <tr key={s.id} style={{background:i%2===0?"transparent":C.elevated}}>
-                        <td style={{padding:"8px 10px",fontWeight:600,color:C.text}}>{s.studentName}</td>
+                        <td style={{padding:"8px 10px",fontWeight:600}}>{s.studentName}</td>
                         <td style={{padding:"8px 10px",color:C.muted}}>{s.studentClass||"—"}</td>
                         <td style={{padding:"8px 10px"}}>
                           <div style={{display:"flex",alignItems:"center",gap:8}}>
                             <span style={{fontWeight:700,color:gr.c}}>{s.pct}%</span>
-                            <div style={{flex:1,height:5,background:C.border,borderRadius:4,minWidth:60}}>
+                            <div style={{flex:1,height:5,background:C.border,borderRadius:4,minWidth:50}}>
                               <div style={{height:"100%",width:s.pct+"%",background:gr.c,borderRadius:4}}/>
                             </div>
                           </div>
                         </td>
                         <td style={{padding:"8px 10px"}}><span style={{...S.badge(gr.c,gr.c+"22")}}>{gr.g}</span></td>
-                        <td style={{padding:"8px 10px",color:C.muted}}>{s.submittedAt?.slice(0,10)}</td>
+                        <td style={{padding:"8px 10px",color:C.muted}}>{s.gradedAt?.slice(0,10)||s.submittedAt?.slice(0,10)}</td>
                       </tr>
                     );
                   })}
@@ -1186,10 +1628,7 @@ function ResultsView({data,users,myExams,isAdmin}){
         </>
       )}
 
-      {/* Deliberation */}
-      {isAdmin&&subs.length>0&&(
-        <DeliberationPanel subs={subs} users={users} exam={exam}/>
-      )}
+      {isAdmin&&gradedSubs.length>0&&<DeliberationPanel subs={gradedSubs} users={users} exam={exam}/>}
     </div>
   );
 }
@@ -1237,9 +1676,7 @@ function DeliberationPanel({subs,users,exam}){
   );
 }
 
-/* ═══════════════════════════════════════════════
-   RESOURCES PANEL
-═══════════════════════════════════════════════ */
+/* ═══════════════════════════ RESOURCES PANEL ═══════════════════════════ */
 function ResourcesPanel({user,data,setData,toast,isTeacher,isStudent}){
   const[form,setForm]=useState({title:"",subject:"",type:"Notes",url:"",description:""});
   const[adding,setAdding]=useState(false);
@@ -1255,14 +1692,12 @@ function ResourcesPanel({user,data,setData,toast,isTeacher,isStudent}){
     setForm({title:"",subject:"",type:"Notes",url:"",description:""});
     setAdding(false);
   }
-
   async function removeResource(id){
     const updated=resources.filter(r=>r.id!==id);
     setData(d=>({...d,resources:updated}));
     dsSet("resources",updated);
     toast("Resource removed");
   }
-
   return(
     <div>
       {isTeacher&&(
@@ -1295,7 +1730,6 @@ function ResourcesPanel({user,data,setData,toast,isTeacher,isStudent}){
           )}
         </>
       )}
-
       {resources.length===0&&<div style={{...S.card,color:C.faint,textAlign:"center",padding:40}}>No resources yet.</div>}
       {resources.map(r=>(
         <div key={r.id} style={S.card}>
@@ -1337,18 +1771,14 @@ function AnnouncementsPanel({data,role}){
   );
 }
 
-/* ═══════════════════════════════════════════════
-   MAIN APP
-═══════════════════════════════════════════════ */
+/* ═══════════════════════════ MAIN APP ═══════════════════════════ */
 function App(){
   const[user,setUser]=useState(null);
   const[users,setUsers]=useState(INIT_USERS);
   const[data,setData]=useState(INIT_DATA);
   const[loading,setLoading]=useState(true);
-  const[page,setPage]=useState("dash");
   const[showToast,toastEl]=useToast();
 
-  // Load data from JSONBin on mount
   useEffect(()=>{
     (async()=>{
       try{
@@ -1370,7 +1800,7 @@ function App(){
     })();
   },[]);
 
-  function doLogout(){setUser(null);setPage("dash");}
+  function doLogout(){setUser(null);}
 
   if(loading)return(
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
@@ -1383,12 +1813,9 @@ function App(){
 
   if(!user) return<LoginPage onLogin={setUser} users={users} setUsers={setUsers}/>;
 
-  const isMobile=window.innerWidth<600;
-
   return(
     <div style={{minHeight:"100vh"}}>
       {toastEl}
-      {/* Top Bar */}
       <div style={{background:"#fff",borderBottom:"1px solid "+C.border,position:"sticky",top:0,zIndex:100,
         boxShadow:"0 1px 8px rgba(99,102,241,.07)"}}>
         <div style={{maxWidth:700,margin:"0 auto",padding:"0 14px",height:52,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -1401,14 +1828,10 @@ function App(){
               <div style={{fontWeight:700,color:C.text}}>{user.name}</div>
               <div style={{textTransform:"capitalize"}}>{user.role}</div>
             </div>
-            <button onClick={doLogout} style={{...S.btn(C.redBg,C.red),fontSize:11,padding:"5px 12px",border:"1px solid "+C.red+"44"}}>
-              Sign Out
-            </button>
+            <button onClick={doLogout} style={{...S.btn(C.redBg,C.red),fontSize:11,padding:"5px 12px",border:"1px solid "+C.red+"44"}}>Sign Out</button>
           </div>
         </div>
       </div>
-
-      {/* Content */}
       <div style={{maxWidth:700,margin:"0 auto",padding:"16px 14px 40px"}}>
         <div className="fade-in">
           {user.role==="admin"&&<AdminDash user={user} data={data} setData={setData} users={users} setUsers={setUsers} toast={showToast} onLogout={doLogout}/>}
