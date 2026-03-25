@@ -2091,6 +2091,24 @@ function App(){
   const [capitalLoaded,setCapitalLoaded]=useState(false);
   const [user,setUser]=useState(null);
   const [sessionLoaded,setSessionLoaded]=useState(false);
+  const [globalRefreshing,setGlobalRefreshing]=useState(false);
+  const [lastRefresh,setLastRefresh]=useState("");
+
+  async function refreshAll(){
+    if(globalRefreshing) return;
+    setGlobalRefreshing(true);
+    try{
+      const [freshUsers,freshFarm]=await Promise.all([getOnlineUsers(),_doGetFarm()]);
+      if(freshUsers&&freshUsers.length>0){
+        const workers=freshUsers.filter(u=>u.role!=="admin");
+        setUsers([...INIT_USERS,...workers]);
+      }
+      if(freshFarm) applyFarmData(freshFarm);
+      setLastRefresh(new Date().toLocaleTimeString());
+    }catch(e){console.error("refresh error",e);}
+    setGlobalRefreshing(false);
+  }
+
   const [page,setPage]=useState("home");
   const [showApiModal,setShowApiModal]=useState(false);
 
@@ -2226,6 +2244,7 @@ function App(){
     {id:"daylogs",l:"📋 Daily Logs"},
     {id:"messages",l:"📢 Messages"+(messages.length?" ("+messages.length+")":"")},
     {id:"workers",l:"👷 Workers"+(pending.length?" ("+pending.length+")":"")},
+    {id:"workerdata",l:"🛠️ Edit Worker Data"},
     {id:"remote",l:"🖥️ Remote Work"+(sessions.filter(s=>s.status==="pending").length?" ⚠️"+sessions.filter(s=>s.status==="pending").length:"")},
     {id:"performance",l:"👷 Performance"},
     {id:"weekly",l:"📊 Weekly Report"},
@@ -2253,8 +2272,21 @@ function App(){
     {showApiModal&&<ApiKeyModal onClose={()=>setShowApiModal(false)}/>}
     <div style={S.side}>
       <div style={{padding:"18px 18px 16px",borderBottom:"1px solid rgba(255,255,255,.12)",marginBottom:6,flexShrink:0}}>
-        <div style={{fontSize:17,fontWeight:700,color:"#fff"}}>🐷 FarmIQ</div>
-        <div style={{fontSize:9,color:"rgba(255,255,255,.5)",letterSpacing:1.5,textTransform:"uppercase",marginTop:2}}>AI Farm Manager · Rwanda</div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontSize:17,fontWeight:700,color:"#fff"}}>🐷 FarmIQ</div>
+            <div style={{fontSize:9,color:"rgba(255,255,255,.5)",letterSpacing:1.5,textTransform:"uppercase",marginTop:2}}>AI Farm Manager · Rwanda</div>
+          </div>
+          <button onClick={refreshAll} disabled={globalRefreshing} title="Refresh all data from server" style={{
+            width:34,height:34,borderRadius:"50%",border:"1px solid rgba(74,222,128,.35)",
+            background:globalRefreshing?"rgba(74,222,128,.2)":"rgba(74,222,128,.08)",
+            color:"#4ade80",fontSize:16,cursor:"pointer",fontFamily:"inherit",
+            display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,padding:0
+          }}>
+            <span style={globalRefreshing?{display:"inline-block",animation:"spin .8s linear infinite"}:{}}>{globalRefreshing?"⏳":"🔄"}</span>
+          </button>
+        </div>
+        {lastRefresh&&<div style={{fontSize:9,color:"rgba(74,222,128,.5)",marginTop:4}}>Last sync: {lastRefresh}</div>}
       </div>
       <div style={{padding:"8px 14px 6px",flexShrink:0}}>
         <button onClick={()=>setShowApiModal(true)} style={{width:"100%",padding:"7px 11px",borderRadius:8,border:"1px solid "+(getApiKey()?"rgba(74,222,128,.3)":"rgba(245,158,11,.4)"),background:getApiKey()?"rgba(74,222,128,.08)":"rgba(245,158,11,.07)",color:getApiKey()?"#4ade80":"#fbbf24",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600,display:"flex",alignItems:"center",gap:7,justifyContent:"center"}}>
@@ -2318,6 +2350,7 @@ function App(){
       {isAdmin&&page==="daylogs"&&<DLogs logs={logs} setLogs={setLogs} pigs={pigs} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} allData={allData} user={user}/>}
       {isAdmin&&page==="messages"&&<AIMessages users={users} messages={messages} setMessages={setMessages} pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
       {isAdmin&&page==="workers"&&<Workers users={users} setUsers={setUsers}/>}
+      {isAdmin&&page==="workerdata"&&<AdminWorkerDataEditor feeds={feeds} setFeeds={setFeeds} logs={logs} setLogs={setLogs} sales={sales} setSales={setSales} expenses={expenses} setExpenses={setExpenses} capital={capital} setCapital={setCapital} pigs={pigs} users={users}/>}
       {isAdmin&&page==="remote"&&<RemoteWorkAdmin sessions={sessions} setSessions={setSessions} users={users}/>}
       {isAdmin&&page==="capital"&&<CapitalManager capital={capital} setCapital={setCapital} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} pigs={pigs} user={user}/>}
       {isAdmin&&page==="adminbuy"&&<BEntry user={user} expenses={expenses} setExpenses={setExpenses} capital={capital} setCapital={setCapital}/>}
@@ -5012,6 +5045,366 @@ function BEntry({user,expenses,setExpenses,capital,setCapital}){
       </button>
       {(!total||total<=0)&&<div style={{fontSize:11,color:C.faint,marginTop:7,textAlign:"center"}}>Enter a total amount to save</div>}
     </div>
+  </div>);
+}
+
+/* ═══════════════════════════════════════════════════
+   ADMIN WORKER DATA EDITOR
+   Full CRUD on worker-submitted feeds, logs, sales, expenses
+   Every edit/delete cascades to capital & P&L automatically
+═══════════════════════════════════════════════════ */
+function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expenses,setExpenses,capital,setCapital,pigs,users}){
+  const [tab,setTab]=useState("feeds");
+  const [editId,setEditId]=useState(null);
+  const [editForm,setEditForm]=useState(null);
+  const [toast,setToast]=useState(null);
+  const [search,setSearch]=useState("");
+
+  function showToast(msg,type="success"){setToast({msg,type});setTimeout(()=>setToast(null),3000);}
+
+  // ── Capital cascade helpers ──
+  function patchCapitalTx(refId,newAmt,newType,newCat,newDesc,newDate){
+    setCapital(prev=>{
+      const txs=(prev.transactions||[]).map(t=>{
+        if(t.refId===refId) return{...t,amount:Math.round(newAmt),type:newType,category:newCat,description:newDesc,date:newDate};
+        return t;
+      });
+      return{...prev,transactions:txs};
+    });
+  }
+  function removeCapitalTx(refId){
+    setCapital(prev=>({...prev,transactions:(prev.transactions||[]).filter(t=>t.refId!==refId)}));
+  }
+  function ensureCapitalTx(refId,type,category,amount,description,date){
+    setCapital(prev=>{
+      const exists=(prev.transactions||[]).some(t=>t.refId===refId);
+      if(exists) return prev;
+      const tx={id:uid(),type,category,amount:Math.round(amount),description,date,createdAt:new Date().toISOString(),refId};
+      return{...prev,transactions:[...(prev.transactions||[]),tx]};
+    });
+  }
+
+  // ── FEEDS ──
+  function saveFeedEdit(id){
+    const f=editForm;
+    const kg=parseFloat(f.kg)||0;
+    const cpk=parseFloat(f.costPerKg)||0;
+    const cost=kg>0&&cpk>0?Math.round(kg*cpk):parseFloat(f.cost)||0;
+    const updated=feeds.map(x=>x.id===id?{...x,...f,kg,costPerKg:cpk,cost}:x);
+    setFeeds(updated);fsSet("feeds",updated);
+    const orig=feeds.find(x=>x.id===id);
+    const refId="feed_"+id;
+    if((capital.transactions||[]).some(t=>t.refId===refId)){
+      patchCapitalTx(refId,cost,"expense","Feed Purchase",`${kg}kg ${f.feedType||orig.feedType} — edited by admin`,f.date||orig.date);
+    }else{
+      ensureCapitalTx(refId,"expense","Feed Purchase",cost,`${kg}kg ${f.feedType||orig.feedType} — admin edit`,f.date||orig.date);
+    }
+    setEditId(null);setEditForm(null);
+    showToast("✅ Feed log updated — capital synced");
+  }
+  function deleteFeed(id){
+    if(!window.confirm("Delete this feed log? Capital will be adjusted."))return;
+    setFeeds(p=>{const u=p.filter(x=>x.id!==id);fsSet("feeds",u);return u;});
+    removeCapitalTx("feed_"+id);
+    showToast("🗑️ Feed log deleted — capital adjusted");
+  }
+
+  // ── LOGS ──
+  function saveLogEdit(id){
+    const updated=logs.map(x=>x.id===id?{...x,...editForm,checked:parseInt(editForm.checked)||0,sick:parseInt(editForm.sick)||0,deaths:parseInt(editForm.deaths)||0,births:parseInt(editForm.births)||0,water:editForm.water==="yes"||editForm.water===true,cleaned:editForm.cleaned==="yes"||editForm.cleaned===true}:x);
+    setLogs(updated);fsSet("logs",updated);
+    const lossAmt=parseFloat(editForm.deathLossAmount)||0;
+    const refId="deathloss_"+id;
+    if(lossAmt>0){
+      if((capital.transactions||[]).some(t=>t.refId===refId)){
+        patchCapitalTx(refId,lossAmt,"expense","Pig Death Loss",`${parseInt(editForm.deaths)||0} pig(s) died — edited by admin`,editForm.date);
+      }else{
+        ensureCapitalTx(refId,"expense","Pig Death Loss",lossAmt,`${parseInt(editForm.deaths)||0} pig(s) died — admin edit`,editForm.date);
+      }
+    }else{
+      removeCapitalTx(refId);
+    }
+    setEditId(null);setEditForm(null);
+    showToast("✅ Daily log updated — capital synced");
+  }
+  function deleteLog(id){
+    if(!window.confirm("Delete this daily log?"))return;
+    setLogs(p=>{const u=p.filter(x=>x.id!==id);fsSet("logs",u);return u;});
+    removeCapitalTx("deathloss_"+id);
+    showToast("🗑️ Daily log deleted");
+  }
+
+  // ── SALES ──
+  function saveSaleEdit(id){
+    const w=parseFloat(editForm.weight)||0;
+    const pk=parseFloat(editForm.priceKg)||0;
+    const total=w>0&&pk>0?Math.round(w*pk):parseFloat(editForm.total)||0;
+    const updated=sales.map(x=>x.id===id?{...x,...editForm,weight:w,priceKg:pk,total}:x);
+    setSales(updated);fsSet("sales",updated);
+    const refId="sale_"+id;
+    const orig=sales.find(x=>x.id===id);
+    if((capital.transactions||[]).some(t=>t.refId===refId)){
+      patchCapitalTx(refId,total,"income","Pig Sale",`${w}kg @ RWF${pk}/kg to ${editForm.buyer||orig.buyer||"buyer"} — edited by admin`,editForm.date||orig.date);
+    }else{
+      ensureCapitalTx(refId,"income","Pig Sale",total,`${w}kg @ RWF${pk}/kg to ${editForm.buyer||orig.buyer||"buyer"} — admin edit`,editForm.date||orig.date);
+    }
+    setEditId(null);setEditForm(null);
+    showToast("✅ Sale updated — capital & P&L synced");
+  }
+  function deleteSale(id){
+    if(!window.confirm("Delete this sale? Capital income will be reversed."))return;
+    setSales(p=>{const u=p.filter(x=>x.id!==id);fsSet("sales",u);return u;});
+    removeCapitalTx("sale_"+id);
+    showToast("🗑️ Sale deleted — capital reversed");
+  }
+
+  // ── EXPENSES ──
+  function saveExpenseEdit(id){
+    const amt=parseFloat(editForm.amount)||0;
+    const updated=expenses.map(x=>x.id===id?{...x,...editForm,amount:amt}:x);
+    setExpenses(updated);fsSet("expenses",updated);
+    const refId="exp_"+id;
+    const orig=expenses.find(x=>x.id===id);
+    if((capital.transactions||[]).some(t=>t.refId===refId)){
+      patchCapitalTx(refId,amt,"expense",editForm.category||orig.category,editForm.description||orig.description||editForm.category,editForm.date||orig.date);
+    }else{
+      ensureCapitalTx(refId,"expense",editForm.category||orig.category,amt,editForm.description||orig.description||editForm.category,editForm.date||orig.date);
+    }
+    setEditId(null);setEditForm(null);
+    showToast("✅ Expense updated — capital synced");
+  }
+  function deleteExpense(id){
+    if(!window.confirm("Delete this expense? Capital will be adjusted."))return;
+    setExpenses(p=>{const u=p.filter(x=>x.id!==id);fsSet("expenses",u);return u;});
+    removeCapitalTx("exp_"+id);
+    showToast("🗑️ Expense deleted — capital adjusted");
+  }
+
+  const TABS=[{id:"feeds",l:"🌾 Feeds",count:feeds.length},{id:"logs",l:"📋 Daily Logs",count:logs.length},{id:"sales",l:"🏷️ Sales",count:sales.length},{id:"expenses",l:"🛒 Expenses",count:expenses.length}];
+  const workerName=(id)=>{const u=users.find(x=>x.id===id);return u?u.name:"—";};
+  const q=search.toLowerCase();
+
+  return(<div>
+    {toast&&<div style={{position:"fixed",bottom:24,right:24,zIndex:9999,background:toast.type==="success"?"#16a34a":"#dc2626",color:"#fff",padding:"12px 18px",borderRadius:12,fontSize:13,fontWeight:600,boxShadow:"0 8px 30px rgba(0,0,0,.18)",animation:"fadeIn .3s ease both"}}>{toast.msg}</div>}
+    <div style={S.h1}>🛠️ Admin: Edit Worker Data</div>
+    <div style={S.sub}>Edit or delete any record submitted by workers — every change instantly updates Capital & P&L</div>
+
+    {/* Live impact summary */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
+      {[["🌾 Feed Records",feeds.length,C.amber],["📋 Daily Logs",logs.length,C.blue],["🏷️ Sales",sales.length,"#10b981"],["🛒 Expenses",expenses.length,C.red]].map(([l,v,c])=>(
+        <div key={l} style={{background:C.surface,border:"1px solid "+C.border,borderRadius:10,padding:"12px 14px",boxShadow:"0 1px 4px rgba(0,0,0,.04)"}}>
+          <div style={{fontSize:10,color:C.faint,marginBottom:4,textTransform:"uppercase"}}>{l}</div>
+          <div style={{fontSize:22,fontWeight:700,color:c}}>{v}</div>
+        </div>
+      ))}
+    </div>
+
+    <div style={{padding:"10px 14px",background:"rgba(22,163,74,.06)",border:"1px solid rgba(22,163,74,.2)",borderRadius:9,marginBottom:14,fontSize:12,color:C.muted}}>
+      ⚡ <strong style={{color:C.accent}}>Live sync active</strong> — every edit/delete automatically updates Capital Balance, P&L, and Dashboard in real-time. No manual recalculation needed.
+    </div>
+
+    {/* Search */}
+    <div style={{marginBottom:12}}>
+      <input placeholder="🔍 Search by worker, pig tag, date, category…" value={search} onChange={e=>setSearch(e.target.value)} style={{...S.inp,maxWidth:400}}/>
+    </div>
+
+    {/* Tabs */}
+    <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
+      {TABS.map(t=><button key={t.id} onClick={()=>{setTab(t.id);setEditId(null);setEditForm(null);}} style={{padding:"8px 14px",borderRadius:9,border:"none",background:tab===t.id?C.accent:"transparent",color:tab===t.id?"#fff":C.muted,fontWeight:tab===t.id?700:400,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>{t.l} <span style={{fontSize:10,opacity:.7}}>({t.count})</span></button>)}
+    </div>
+
+    {/* ── FEEDS TAB ── */}
+    {tab==="feeds"&&<div>
+      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:10}}>🌾 All Feeding Records ({feeds.length})</div>
+      {feeds.length===0&&<div style={{...S.card,color:C.faint,fontSize:13}}>No feed records yet.</div>}
+      {feeds.filter(f=>!q||(f.worker||"").toLowerCase().includes(q)||(f.feedType||"").toLowerCase().includes(q)||(f.date||"").includes(q)).slice().reverse().map(f=>{
+        const pig=pigs.find(p=>p.id===f.pigId);
+        return(<div key={f.id} style={{...S.card,marginBottom:10,border:"1px solid "+C.border}}>
+          {editId===f.id&&editForm?(
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:C.amber,marginBottom:10}}>✏️ Editing Feed Log</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                <div><label style={S.lbl}>Feed Type</label>
+                  <select value={editForm.feedType} onChange={e=>setEditForm({...editForm,feedType:e.target.value})} style={S.inp}>
+                    {["Maize bran","Soya meal","Pellets","Kitchen waste","Mixed","Other"].map(x=><option key={x}>{x}</option>)}
+                  </select>
+                </div>
+                <div><label style={S.lbl}>Date</label><input type="date" value={editForm.date} onChange={e=>setEditForm({...editForm,date:e.target.value})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Amount (kg)</label><input type="number" min="0" step="0.1" value={editForm.kg} onChange={e=>setEditForm({...editForm,kg:e.target.value})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Cost per kg (RWF)</label><input type="number" min="0" value={editForm.costPerKg} onChange={e=>setEditForm({...editForm,costPerKg:e.target.value})} style={S.inp}/></div>
+                <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Notes</label><input value={editForm.notes||""} onChange={e=>setEditForm({...editForm,notes:e.target.value})} style={S.inp}/></div>
+              </div>
+              {editForm.kg&&editForm.costPerKg&&<div style={{padding:"8px 12px",background:"rgba(239,68,68,.06)",borderRadius:7,marginBottom:10,fontSize:12,color:C.red}}>
+                New total cost: <strong>{fmtRWF(Math.round((parseFloat(editForm.kg)||0)*(parseFloat(editForm.costPerKg)||0)))}</strong> → will update capital
+              </div>}
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>saveFeedEdit(f.id)} style={{...S.btn(C.accent),flex:1,padding:8,fontSize:12}}>✓ Save & Sync Capital</button>
+                <button onClick={()=>{setEditId(null);setEditForm(null);}} style={{...S.btn("#374151"),padding:8,fontSize:12}}>Cancel</button>
+              </div>
+            </div>
+          ):(
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,color:C.text,fontSize:13}}>🌾 {f.feedType} — {f.kg}kg</div>
+                <div style={{fontSize:11,color:C.faint,marginTop:2}}>👷 {f.worker||workerName(f.workerId)} · {f.date} · {pig?"🐷 "+pig.tag:"All pigs"}</div>
+                {f.notes&&<div style={{fontSize:11,color:C.muted,marginTop:2,fontStyle:"italic"}}>"{f.notes}"</div>}
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontWeight:700,color:C.amber,fontSize:14}}>{fmtRWF(f.cost)}</div>
+                <div style={{display:"flex",gap:5,marginTop:5,justifyContent:"flex-end"}}>
+                  <button onClick={()=>{setEditId(f.id);setEditForm({feedType:f.feedType,date:f.date,kg:String(f.kg||""),costPerKg:String(f.costPerKg||""),notes:f.notes||""});}} style={{fontSize:11,padding:"3px 10px",borderRadius:6,border:"1px solid "+C.border,background:"transparent",color:C.text,cursor:"pointer",fontFamily:"inherit"}}>✏️ Edit</button>
+                  <button onClick={()=>deleteFeed(f.id)} style={{fontSize:11,padding:"3px 10px",borderRadius:6,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️ Delete</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>);
+      })}
+    </div>}
+
+    {/* ── LOGS TAB ── */}
+    {tab==="logs"&&<div>
+      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:10}}>📋 All Daily Logs ({logs.length})</div>
+      {logs.length===0&&<div style={{...S.card,color:C.faint,fontSize:13}}>No logs yet.</div>}
+      {logs.filter(l=>!q||(l.worker||"").toLowerCase().includes(q)||(l.date||"").includes(q)||(l.notes||"").toLowerCase().includes(q)).slice().reverse().map(l=>(
+        <div key={l.id} style={{...S.card,marginBottom:10}}>
+          {editId===l.id&&editForm?(
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:C.blue,marginBottom:10}}>✏️ Editing Daily Log</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                <div><label style={S.lbl}>Date</label><input type="date" value={editForm.date} onChange={e=>setEditForm({...editForm,date:e.target.value})} style={S.inp}/></div>
+                {[["checked","Pigs Checked"],["sick","Sick Pigs"],["deaths","Deaths"],["births","New Births"]].map(([k,lbl])=>(
+                  <div key={k}><label style={S.lbl}>{lbl}</label><input type="number" min="0" value={editForm[k]||0} onChange={e=>setEditForm({...editForm,[k]:e.target.value})} style={S.inp}/></div>
+                ))}
+                {[["water","Water OK?"],["cleaned","Pen Cleaned?"]].map(([k,lbl])=>(
+                  <div key={k}><label style={S.lbl}>{lbl}</label>
+                    <select value={editForm[k]==="yes"||editForm[k]===true?"yes":"no"} onChange={e=>setEditForm({...editForm,[k]:e.target.value==="yes"})} style={S.inp}>
+                      <option value="yes">Yes ✓</option><option value="no">No ✗</option>
+                    </select>
+                  </div>
+                ))}
+                <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Death Loss Amount (RWF)</label><input type="number" min="0" value={editForm.deathLossAmount||""} onChange={e=>setEditForm({...editForm,deathLossAmount:e.target.value})} placeholder="0 = no capital loss" style={S.inp}/></div>
+                <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Notes</label><textarea rows={2} value={editForm.notes||""} onChange={e=>setEditForm({...editForm,notes:e.target.value})} style={{...S.inp,resize:"vertical"}}/></div>
+              </div>
+              {(parseInt(editForm.deaths)||0)>0&&<div style={{padding:"8px 12px",background:"rgba(239,68,68,.06)",borderRadius:7,marginBottom:10,fontSize:12,color:C.red}}>
+                {parseFloat(editForm.deathLossAmount)>0?`Capital deduction: ${fmtRWF(parseFloat(editForm.deathLossAmount))}`:"{No capital loss recorded}"}
+              </div>}
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>saveLogEdit(l.id)} style={{...S.btn(C.accent),flex:1,padding:8,fontSize:12}}>✓ Save & Sync Capital</button>
+                <button onClick={()=>{setEditId(null);setEditForm(null);}} style={{...S.btn("#374151"),padding:8,fontSize:12}}>Cancel</button>
+              </div>
+            </div>
+          ):(
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:13,color:C.text}}>📋 {l.worker} — {l.date}</div>
+                <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:5,fontSize:11}}>
+                  {[["✓ Checked",l.checked,C.accent],["🤒 Sick",l.sick,l.sick>0?C.red:C.muted],["💀 Deaths",l.deaths,l.deaths>0?C.red:C.muted],["🐣 Births",l.births,l.births>0?"#10b981":C.muted]].map(([lbl,val,col])=>(
+                    <span key={lbl} style={{padding:"2px 8px",borderRadius:20,background:C.elevated,color:col,fontWeight:val>0?700:400}}>{lbl}: {val}</span>
+                  ))}
+                </div>
+                {l.notes&&<div style={{fontSize:11,color:C.muted,marginTop:4,fontStyle:"italic"}}>"{l.notes}"</div>}
+              </div>
+              <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                <button onClick={()=>{setEditId(l.id);setEditForm({date:l.date,checked:String(l.checked||0),sick:String(l.sick||0),deaths:String(l.deaths||0),births:String(l.births||0),water:l.water?"yes":"no",cleaned:l.cleaned?"yes":"no",notes:l.notes||"",deathLossAmount:String(l.deathLossAmount||"")});}} style={{fontSize:11,padding:"3px 10px",borderRadius:6,border:"1px solid "+C.border,background:"transparent",color:C.text,cursor:"pointer",fontFamily:"inherit"}}>✏️ Edit</button>
+                <button onClick={()=>deleteLog(l.id)} style={{fontSize:11,padding:"3px 10px",borderRadius:6,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>}
+
+    {/* ── SALES TAB ── */}
+    {tab==="sales"&&<div>
+      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:10}}>🏷️ All Sale Records ({sales.length})</div>
+      {sales.length===0&&<div style={{...S.card,color:C.faint,fontSize:13}}>No sales yet.</div>}
+      {sales.filter(s=>!q||(s.worker||"").toLowerCase().includes(q)||(s.buyer||"").toLowerCase().includes(q)||(s.date||"").includes(q)).slice().reverse().map(s=>{
+        const pig=pigs.find(p=>p.id===s.pigId);
+        return(<div key={s.id} style={{...S.card,marginBottom:10}}>
+          {editId===s.id&&editForm?(
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:"#10b981",marginBottom:10}}>✏️ Editing Sale Record</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                <div><label style={S.lbl}>Buyer</label><input value={editForm.buyer} onChange={e=>setEditForm({...editForm,buyer:e.target.value})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Date</label><input type="date" value={editForm.date} onChange={e=>setEditForm({...editForm,date:e.target.value})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Weight (kg)</label><input type="number" value={editForm.weight} onChange={e=>{const w=e.target.value;const pk=parseFloat(editForm.priceKg)||0;setEditForm({...editForm,weight:w,total:String(Math.round((parseFloat(w)||0)*pk))});}} style={S.inp}/></div>
+                <div><label style={S.lbl}>Price/kg (RWF)</label><input type="number" value={editForm.priceKg} onChange={e=>{const pk=e.target.value;const w=parseFloat(editForm.weight)||0;setEditForm({...editForm,priceKg:pk,total:String(Math.round(w*(parseFloat(pk)||0)))});}} style={S.inp}/></div>
+                <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Total (RWF)</label><input type="number" value={editForm.total} onChange={e=>setEditForm({...editForm,total:e.target.value})} style={S.inp}/></div>
+              </div>
+              {editForm.total&&<div style={{padding:"8px 12px",background:"rgba(16,185,129,.06)",borderRadius:7,marginBottom:10,fontSize:12,color:"#10b981"}}>
+                New income: <strong>{fmtRWF(parseFloat(editForm.total)||0)}</strong> → will update capital
+              </div>}
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>saveSaleEdit(s.id)} style={{...S.btn(C.accent),flex:1,padding:8,fontSize:12}}>✓ Save & Sync Capital</button>
+                <button onClick={()=>{setEditId(null);setEditForm(null);}} style={{...S.btn("#374151"),padding:8,fontSize:12}}>Cancel</button>
+              </div>
+            </div>
+          ):(
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:13,color:C.text}}>🏷️ {pig?pig.tag:"—"} → {s.buyer||"—"}</div>
+                <div style={{fontSize:11,color:C.faint,marginTop:2}}>👷 {s.worker} · {s.date} · {s.weight}kg @ RWF{fmtNum(s.priceKg)}/kg</div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontWeight:700,color:"#10b981",fontSize:14}}>{fmtRWF(s.total)}</div>
+                <div style={{display:"flex",gap:5,marginTop:5,justifyContent:"flex-end"}}>
+                  <button onClick={()=>{setEditId(s.id);setEditForm({buyer:s.buyer||"",date:s.date,weight:String(s.weight||""),priceKg:String(s.priceKg||""),total:String(s.total||"")});}} style={{fontSize:11,padding:"3px 10px",borderRadius:6,border:"1px solid "+C.border,background:"transparent",color:C.text,cursor:"pointer",fontFamily:"inherit"}}>✏️ Edit</button>
+                  <button onClick={()=>deleteSale(s.id)} style={{fontSize:11,padding:"3px 10px",borderRadius:6,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️ Delete</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>);
+      })}
+    </div>}
+
+    {/* ── EXPENSES TAB ── */}
+    {tab==="expenses"&&<div>
+      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:10}}>🛒 All Expense Records ({expenses.length})</div>
+      {expenses.length===0&&<div style={{...S.card,color:C.faint,fontSize:13}}>No expense records yet.</div>}
+      {expenses.filter(e=>!q||(e.worker||"").toLowerCase().includes(q)||(e.category||"").toLowerCase().includes(q)||(e.description||"").toLowerCase().includes(q)||(e.date||"").includes(q)).slice().reverse().map(e=>(
+        <div key={e.id} style={{...S.card,marginBottom:10}}>
+          {editId===e.id&&editForm?(
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:C.red,marginBottom:10}}>✏️ Editing Expense</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                <div><label style={S.lbl}>Category</label>
+                  <select value={editForm.category} onChange={ex=>setEditForm({...editForm,category:ex.target.value})} style={S.inp}>
+                    {["Feed Purchase","Medicine","Veterinary","Equipment","Transport","Labour","Utilities","Maintenance","Pig Purchase","Other"].map(c=><option key={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div><label style={S.lbl}>Date</label><input type="date" value={editForm.date} onChange={ex=>setEditForm({...editForm,date:ex.target.value})} style={S.inp}/></div>
+                <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Amount (RWF)</label><input type="number" min="0" value={editForm.amount} onChange={ex=>setEditForm({...editForm,amount:ex.target.value})} style={S.inp}/></div>
+                <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Description</label><input value={editForm.description||""} onChange={ex=>setEditForm({...editForm,description:ex.target.value})} style={S.inp}/></div>
+              </div>
+              {editForm.amount&&<div style={{padding:"8px 12px",background:"rgba(239,68,68,.06)",borderRadius:7,marginBottom:10,fontSize:12,color:C.red}}>
+                New expense: <strong>{fmtRWF(parseFloat(editForm.amount)||0)}</strong> → will update capital
+              </div>}
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>saveExpenseEdit(e.id)} style={{...S.btn(C.accent),flex:1,padding:8,fontSize:12}}>✓ Save & Sync Capital</button>
+                <button onClick={()=>{setEditId(null);setEditForm(null);}} style={{...S.btn("#374151"),padding:8,fontSize:12}}>Cancel</button>
+              </div>
+            </div>
+          ):(
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:13,color:C.text}}>🛒 {e.category}</div>
+                <div style={{fontSize:11,color:C.faint,marginTop:2}}>👷 {e.worker||"Admin"} · {e.date}</div>
+                {e.description&&<div style={{fontSize:11,color:C.muted,marginTop:2}}>{e.description}</div>}
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontWeight:700,color:C.red,fontSize:14}}>{fmtRWF(e.amount)}</div>
+                <div style={{display:"flex",gap:5,marginTop:5,justifyContent:"flex-end"}}>
+                  <button onClick={()=>{setEditId(e.id);setEditForm({category:e.category,date:e.date,amount:String(e.amount||""),description:e.description||""});}} style={{fontSize:11,padding:"3px 10px",borderRadius:6,border:"1px solid "+C.border,background:"transparent",color:C.text,cursor:"pointer",fontFamily:"inherit"}}>✏️ Edit</button>
+                  <button onClick={()=>deleteExpense(e.id)} style={{fontSize:11,padding:"3px 10px",borderRadius:6,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️ Delete</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>}
   </div>);
 }
 
