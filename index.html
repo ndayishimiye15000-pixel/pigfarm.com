@@ -59,15 +59,55 @@ const fmtRWF=(n)=>"RWF "+Math.round(n||0).toLocaleString();
 const fmtNum=(n)=>Math.round(n||0).toLocaleString();
 
 /* ─── Capital Helpers ─── */
-// Single source of truth for capital balance
-function calcCapitalBalance(capital){
-  const initial=capital.initial||0;
-  const txTotal=(capital.transactions||[]).reduce((s,t)=>{
-    const amt=parseFloat(t.amount)||0;
-    return t.type==="income"?s+amt:s-amt;
-  },0);
-  return initial+txTotal;
+
+// ══════════════════════════════════════════════════════════
+// SINGLE SOURCE OF TRUTH: capital balance is ALWAYS derived
+// from actual live data arrays (feeds, sales, expenses, incomes)
+// + the manual capital.transactions that have NO refId tie
+// (i.e. manually added injections/adjustments).
+// This means: delete a feed → balance drops immediately.
+// ══════════════════════════════════════════════════════════
+
+// Rebuild capital balance purely from actual data arrays.
+// Pass the live arrays so deletions/edits instantly reflect.
+function calcCapitalBalance(capital, feeds, sales, expenses, incomes){
+  const initial = capital.initial || 0;
+  // Sum actual income from sales + manual incomes
+  const saleInc  = (sales   ||[]).reduce((s,x)=>s+(x.total   ||0),0);
+  const otherInc = (incomes  ||[]).reduce((s,x)=>s+(x.amount  ||0),0);
+  // Sum actual expenses from feeds + manual expenses
+  const feedExp  = (feeds    ||[]).reduce((s,x)=>s+(x.cost    ||0),0);
+  const otherExp = (expenses ||[]).reduce((s,x)=>s+(x.amount  ||0),0);
+  // Manual-only capital transactions (no refId = hand-entered injections/adjustments)
+  const manualTxTotal = (capital.transactions||[])
+    .filter(t=>!t.refId)
+    .reduce((s,t)=>{
+      const amt=parseFloat(t.amount)||0;
+      return t.type==="income"?s+amt:s-amt;
+    },0);
+  return initial + saleInc + otherInc - feedExp - otherExp + manualTxTotal;
 }
+
+// Purge orphaned capital transactions whose refId no longer maps to a real record.
+// Call this after any delete to keep capital.transactions clean.
+function purgeOrphanedCapitalTx(capital, setCapital, feeds, sales, expenses, logs){
+  const validFeedIds  = new Set((feeds   ||[]).map(x=>"feed_"      +x.id));
+  const validSaleIds  = new Set((sales   ||[]).map(x=>"sale_"      +x.id));
+  const validExpIds   = new Set((expenses||[]).map(x=>"exp_"       +x.id));
+  const validLogIds   = new Set((logs    ||[]).map(x=>"deathloss_" +x.id));
+  const clean = (capital.transactions||[]).filter(t=>{
+    if(!t.refId) return true; // keep manual entries
+    if(t.refId.startsWith("feed_"))       return validFeedIds.has(t.refId);
+    if(t.refId.startsWith("sale_"))       return validSaleIds.has(t.refId);
+    if(t.refId.startsWith("exp_"))        return validExpIds.has(t.refId);
+    if(t.refId.startsWith("deathloss_"))  return validLogIds.has(t.refId);
+    return true; // unknown refId pattern → keep to be safe
+  });
+  if(clean.length !== (capital.transactions||[]).length){
+    setCapital(prev=>({...prev, transactions:clean}));
+  }
+}
+
 // Add a capital transaction with dedup guard via refId
 function capitalTx(capital,setCapital,{type,category,amount,description,date,refId}){
   const amt=Math.round(parseFloat(amount)||0);
@@ -80,10 +120,9 @@ function capitalTx(capital,setCapital,{type,category,amount,description,date,ref
   setCapital(prev=>({...prev,transactions:[...(prev.transactions||[]),tx]}));
   return tx;
 }
-// Derive consistent P&L totals from capital transactions (preferred) or raw arrays (fallback)
+
+// P&L — same source of truth as calcCapitalBalance (actual data arrays)
 function calcPnL(capital,feeds,sales,expenses,incomes){
-  // Always derive from actual data arrays so edits/deletes instantly update P&L.
-  // capital.transactions is used only for the capital balance tracker (calcCapitalBalance).
   const totalInc=sales.reduce((s,l)=>s+(l.total||0),0)+incomes.reduce((s,l)=>s+(l.amount||0),0);
   const totalExp=feeds.reduce((s,l)=>s+(l.cost||0),0)+expenses.reduce((s,l)=>s+(l.amount||0),0);
   return{totalInc,totalExp,profit:totalInc-totalExp};
@@ -2350,7 +2389,7 @@ function App(){
       {isAdmin&&page==="daylogs"&&<DLogs logs={logs} setLogs={setLogs} pigs={pigs} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} allData={allData} user={user}/>}
       {isAdmin&&page==="messages"&&<AIMessages users={users} messages={messages} setMessages={setMessages} pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
       {isAdmin&&page==="workers"&&<Workers users={users} setUsers={setUsers}/>}
-      {isAdmin&&page==="workerdata"&&<AdminWorkerDataEditor feeds={feeds} setFeeds={setFeeds} logs={logs} setLogs={setLogs} sales={sales} setSales={setSales} expenses={expenses} setExpenses={setExpenses} capital={capital} setCapital={setCapital} pigs={pigs} users={users}/>}
+      {isAdmin&&page==="workerdata"&&<AdminWorkerDataEditor feeds={feeds} setFeeds={setFeeds} logs={logs} setLogs={setLogs} sales={sales} setSales={setSales} expenses={expenses} setExpenses={setExpenses} incomes={incomes} capital={capital} setCapital={setCapital} pigs={pigs} users={users}/>}
       {isAdmin&&page==="remote"&&<RemoteWorkAdmin sessions={sessions} setSessions={setSessions} users={users}/>}
       {isAdmin&&page==="capital"&&<CapitalManager capital={capital} setCapital={setCapital} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} pigs={pigs} user={user}/>}
       {isAdmin&&page==="adminbuy"&&<BEntry user={user} expenses={expenses} setExpenses={setExpenses} capital={capital} setCapital={setCapital}/>}
@@ -3152,9 +3191,10 @@ function CapitalManager({capital,setCapital,feeds,sales,expenses,incomes,pigs,us
   const [editForm,setEditForm]=useState(null);
 
   const txs=capital.transactions||[];
-  const balance=calcCapitalBalance(capital);
-  const incomeTotal=txs.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
-  const expenseTotal=txs.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
+  const balance=calcCapitalBalance(capital,feeds,sales,expenses,incomes);
+  // Show actual income/expense from real data (not stale transactions)
+  const incomeTotal=sales.reduce((s,x)=>s+(x.total||0),0)+incomes.reduce((s,x)=>s+(x.amount||0),0);
+  const expenseTotal=feeds.reduce((s,x)=>s+(x.cost||0),0)+expenses.reduce((s,x)=>s+(x.amount||0),0);
 
   const INCOME_CATS=["Pig Sale","Piglet Sale","Manure Sale","Investment","Loan","Gift","Other Income"];
   const EXPENSE_CATS=["Feed Purchase","Pig Purchase","Veterinary","Medicine","Equipment","Labour","Transport","Utilities","Maintenance","Pig Death Loss","Other"];
@@ -3845,9 +3885,16 @@ function AHome({pigs,feeds,sales,logs,users,expenses,incomes,reproductions,stock
   const lowStock=stock.filter(s=>s.quantity<=s.minLevel);
   const upcomingFarrows=pregnant.filter(r=>daysDiff(r.expectedFarrow)<=7&&daysDiff(r.expectedFarrow)>=0);
   const recentActivity=[...feeds.map(f=>({...f,type:"feed"})),...sales.map(s=>({...s,type:"sale"})),...logs.map(l=>({...l,type:"log"}))].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,6);
-  const capitalBalance=calcCapitalBalance(capital);
+  const capitalBalance=calcCapitalBalance(capital,feeds,sales,expenses,incomes);
   const [showCapitalSet,setShowCapitalSet]=useState(false);
   const [newInitial,setNewInitial]=useState("");
+  const [fixDone,setFixDone]=useState(false);
+
+  function fixCapital(){
+    purgeOrphanedCapitalTx(capital,setCapital,feeds,sales,expenses,logs);
+    setFixDone(true);
+    setTimeout(()=>setFixDone(false),4000);
+  }
   return(<div>
     <div style={S.h1}>📊 Farm Overview</div>
     <div style={S.sub}>{toDay()} · FarmIQ AI Management</div>
@@ -3857,13 +3904,15 @@ function AHome({pigs,feeds,sales,logs,users,expenses,incomes,reproductions,stock
       <div>
         <div style={{fontSize:11,color:"rgba(74,222,128,.7)",fontWeight:600,letterSpacing:1,textTransform:"uppercase",marginBottom:3}}>💵 Business Capital Balance</div>
         <div style={{fontSize:28,fontWeight:800,color:capitalBalance>=0?"#4ade80":"#f87171"}}>{fmtRWF(capitalBalance)}</div>
-        <div style={{fontSize:11,color:"rgba(255,255,255,.45)",marginTop:2}}>Initial: {fmtRWF(capital.initial||0)} · {(capital.transactions||[]).length} transactions</div>
+        <div style={{fontSize:11,color:"rgba(255,255,255,.45)",marginTop:2}}>Initial: {fmtRWF(capital.initial||0)} · Income: {fmtRWF(totalInc)} · Expenses: {fmtRWF(totalExp)}</div>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         <button onClick={()=>{setShowCapitalSet(!showCapitalSet);setNewInitial(String(capital.initial||""));}} style={{padding:"8px 14px",borderRadius:9,border:"1px solid rgba(74,222,128,.35)",background:"rgba(74,222,128,.1)",color:"#4ade80",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>⚙️ Set Capital</button>
         <button onClick={()=>setPage("capital")} style={{padding:"8px 14px",borderRadius:9,border:"1px solid rgba(74,222,128,.35)",background:"rgba(74,222,128,.1)",color:"#4ade80",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>📋 View All</button>
+        <button onClick={fixCapital} style={{padding:"8px 14px",borderRadius:9,border:"1px solid rgba(239,68,68,.4)",background:"rgba(239,68,68,.1)",color:"#f87171",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🔧 Fix Balance</button>
       </div>
     </div>
+    {fixDone&&<div style={{padding:"10px 14px",background:"rgba(22,163,74,.1)",border:"1px solid rgba(22,163,74,.3)",borderRadius:9,marginBottom:10,fontSize:13,color:C.accent,fontWeight:600}}>✅ Capital balance fixed! Orphaned entries removed. Balance now matches actual records.</div>}
     {showCapitalSet&&<div style={{...S.card,marginBottom:12,border:"1px solid rgba(74,222,128,.3)"}}>
       <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:10}}>Set Initial Capital</div>
       <div style={{display:"flex",gap:9}}>
@@ -5053,14 +5102,27 @@ function BEntry({user,expenses,setExpenses,capital,setCapital}){
    Full CRUD on worker-submitted feeds, logs, sales, expenses
    Every edit/delete cascades to capital & P&L automatically
 ═══════════════════════════════════════════════════ */
-function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expenses,setExpenses,capital,setCapital,pigs,users}){
+function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expenses,setExpenses,incomes,capital,setCapital,pigs,users}){
   const [tab,setTab]=useState("feeds");
   const [editId,setEditId]=useState(null);
   const [editForm,setEditForm]=useState(null);
   const [toast,setToast]=useState(null);
   const [search,setSearch]=useState("");
+  const [recalcDone,setRecalcDone]=useState(false);
+
+  // Auto-purge orphaned capital transactions whenever this page opens
+  useEffect(()=>{
+    purgeOrphanedCapitalTx(capital,setCapital,feeds,sales,expenses,logs);
+  },[]);
 
   function showToast(msg,type="success"){setToast({msg,type});setTimeout(()=>setToast(null),3000);}
+
+  function recalculateCapital(){
+    purgeOrphanedCapitalTx(capital,setCapital,feeds,sales,expenses,logs);
+    setRecalcDone(true);
+    showToast("✅ Capital recalculated! All orphaned transactions purged. Balance now reflects actual data.");
+    setTimeout(()=>setRecalcDone(false),4000);
+  }
 
   // ── Capital cascade helpers ──
   function patchCapitalTx(refId,newAmt,newType,newCat,newDesc,newDate){
@@ -5104,8 +5166,10 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
   }
   function deleteFeed(id){
     if(!window.confirm("Delete this feed log? Capital will be adjusted."))return;
-    setFeeds(p=>{const u=p.filter(x=>x.id!==id);fsSet("feeds",u);return u;});
-    removeCapitalTx("feed_"+id);
+    const updated=feeds.filter(x=>x.id!==id);
+    setFeeds(updated);fsSet("feeds",updated);
+    // Purge all orphaned capital transactions using the new feeds list
+    purgeOrphanedCapitalTx(capital,setCapital,updated,sales,expenses,logs);
     showToast("🗑️ Feed log deleted — capital adjusted");
   }
 
@@ -5129,8 +5193,9 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
   }
   function deleteLog(id){
     if(!window.confirm("Delete this daily log?"))return;
-    setLogs(p=>{const u=p.filter(x=>x.id!==id);fsSet("logs",u);return u;});
-    removeCapitalTx("deathloss_"+id);
+    const updated=logs.filter(x=>x.id!==id);
+    setLogs(updated);fsSet("logs",updated);
+    purgeOrphanedCapitalTx(capital,setCapital,feeds,sales,expenses,updated);
     showToast("🗑️ Daily log deleted");
   }
 
@@ -5153,8 +5218,9 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
   }
   function deleteSale(id){
     if(!window.confirm("Delete this sale? Capital income will be reversed."))return;
-    setSales(p=>{const u=p.filter(x=>x.id!==id);fsSet("sales",u);return u;});
-    removeCapitalTx("sale_"+id);
+    const updated=sales.filter(x=>x.id!==id);
+    setSales(updated);fsSet("sales",updated);
+    purgeOrphanedCapitalTx(capital,setCapital,feeds,updated,expenses,logs);
     showToast("🗑️ Sale deleted — capital reversed");
   }
 
@@ -5175,8 +5241,9 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
   }
   function deleteExpense(id){
     if(!window.confirm("Delete this expense? Capital will be adjusted."))return;
-    setExpenses(p=>{const u=p.filter(x=>x.id!==id);fsSet("expenses",u);return u;});
-    removeCapitalTx("exp_"+id);
+    const updated=expenses.filter(x=>x.id!==id);
+    setExpenses(updated);fsSet("expenses",updated);
+    purgeOrphanedCapitalTx(capital,setCapital,feeds,sales,updated,logs);
     showToast("🗑️ Expense deleted — capital adjusted");
   }
 
@@ -5188,6 +5255,19 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
     {toast&&<div style={{position:"fixed",bottom:24,right:24,zIndex:9999,background:toast.type==="success"?"#16a34a":"#dc2626",color:"#fff",padding:"12px 18px",borderRadius:12,fontSize:13,fontWeight:600,boxShadow:"0 8px 30px rgba(0,0,0,.18)",animation:"fadeIn .3s ease both"}}>{toast.msg}</div>}
     <div style={S.h1}>🛠️ Admin: Edit Worker Data</div>
     <div style={S.sub}>Edit or delete any record submitted by workers — every change instantly updates Capital & P&L</div>
+
+    {/* Recalculate capital banner */}
+    <div style={{padding:"12px 16px",background:"linear-gradient(135deg,#0f2318,#1a3d26)",borderRadius:12,marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+      <div>
+        <div style={{fontSize:12,fontWeight:700,color:"#4ade80",marginBottom:2}}>⚡ Capital Balance (Live)</div>
+        <div style={{fontSize:22,fontWeight:800,color:calcCapitalBalance(capital,feeds,sales,expenses,incomes)>=0?"#4ade80":"#f87171"}}>{fmtRWF(calcCapitalBalance(capital,feeds,sales,expenses,incomes))}</div>
+        <div style={{fontSize:10,color:"rgba(255,255,255,.4)",marginTop:2}}>Derived from actual records — always accurate</div>
+      </div>
+      <button onClick={recalculateCapital} style={{padding:"10px 16px",borderRadius:10,border:"1px solid rgba(74,222,128,.4)",background:"rgba(74,222,128,.12)",color:"#4ade80",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:7}}>
+        🔧 Recalculate & Fix Capital
+      </button>
+    </div>
+    {recalcDone&&<div style={{padding:"10px 14px",background:"rgba(22,163,74,.12)",border:"1px solid rgba(22,163,74,.3)",borderRadius:9,marginBottom:12,fontSize:13,color:C.accent,fontWeight:600}}>✅ Capital fixed! Orphaned transactions removed. All figures now match actual records.</div>}
 
     {/* Live impact summary */}
     <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
