@@ -82,12 +82,8 @@ function capitalTx(capital,setCapital,{type,category,amount,description,date,ref
 }
 // Derive consistent P&L totals from capital transactions (preferred) or raw arrays (fallback)
 function calcPnL(capital,feeds,sales,expenses,incomes){
-  const txs=capital.transactions||[];
-  if(txs.length>0){
-    const totalInc=txs.filter(t=>t.type==="income").reduce((s,t)=>s+(parseFloat(t.amount)||0),0);
-    const totalExp=txs.filter(t=>t.type==="expense").reduce((s,t)=>s+(parseFloat(t.amount)||0),0);
-    return{totalInc,totalExp,profit:totalInc-totalExp};
-  }
+  // Always derive from actual data arrays so edits/deletes instantly update P&L.
+  // capital.transactions is used only for the capital balance tracker (calcCapitalBalance).
   const totalInc=sales.reduce((s,l)=>s+(l.total||0),0)+incomes.reduce((s,l)=>s+(l.amount||0),0);
   const totalExp=feeds.reduce((s,l)=>s+(l.cost||0),0)+expenses.reduce((s,l)=>s+(l.amount||0),0);
   return{totalInc,totalExp,profit:totalInc-totalExp};
