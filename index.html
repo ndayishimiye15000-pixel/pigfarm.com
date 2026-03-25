@@ -44,15 +44,38 @@ const fmtRWF=(n)=>"RWF "+Math.round(n||0).toLocaleString();
 const fmtNum=(n)=>Math.round(n||0).toLocaleString();
 
 /* ─── Capital Helpers ─── */
+// Single source of truth for capital balance
 function calcCapitalBalance(capital){
   const initial=capital.initial||0;
-  const txTotal=(capital.transactions||[]).reduce((s,t)=>t.type==="income"?s+t.amount:s-t.amount,0);
+  const txTotal=(capital.transactions||[]).reduce((s,t)=>{
+    const amt=parseFloat(t.amount)||0;
+    return t.type==="income"?s+amt:s-amt;
+  },0);
   return initial+txTotal;
 }
-function capitalTx(capital,setCapital,{type,category,amount,description,date}){
-  const tx={id:Math.random().toString(36).slice(2,10),type,category,amount:parseFloat(amount)||0,description:description||"",date:date||new Date().toISOString().slice(0,10),createdAt:new Date().toISOString()};
+// Add a capital transaction with dedup guard via refId
+function capitalTx(capital,setCapital,{type,category,amount,description,date,refId}){
+  const amt=Math.round(parseFloat(amount)||0);
+  if(amt<=0) return null;
+  if(refId){
+    const existing=(capital.transactions||[]).find(t=>t.refId===refId);
+    if(existing) return existing;
+  }
+  const tx={id:Math.random().toString(36).slice(2,10),type,category,amount:amt,description:description||"",date:date||new Date().toISOString().slice(0,10),createdAt:new Date().toISOString(),refId:refId||null};
   setCapital(prev=>({...prev,transactions:[...(prev.transactions||[]),tx]}));
   return tx;
+}
+// Derive consistent P&L totals from capital transactions (preferred) or raw arrays (fallback)
+function calcPnL(capital,feeds,sales,expenses,incomes){
+  const txs=capital.transactions||[];
+  if(txs.length>0){
+    const totalInc=txs.filter(t=>t.type==="income").reduce((s,t)=>s+(parseFloat(t.amount)||0),0);
+    const totalExp=txs.filter(t=>t.type==="expense").reduce((s,t)=>s+(parseFloat(t.amount)||0),0);
+    return{totalInc,totalExp,profit:totalInc-totalExp};
+  }
+  const totalInc=sales.reduce((s,l)=>s+(l.total||0),0)+incomes.reduce((s,l)=>s+(l.amount||0),0);
+  const totalExp=feeds.reduce((s,l)=>s+(l.cost||0),0)+expenses.reduce((s,l)=>s+(l.amount||0),0);
+  return{totalInc,totalExp,profit:totalInc-totalExp};
 }
 
 /* ─── Initial Data ─── */
@@ -1048,19 +1071,18 @@ function StockManager({stock,setStock,feeds,pigs,capital,setCapital}){
 }
 
 /* ─── PROFIT & LOSS ANALYSIS ─── */
-function ProfitLossAnalysis({pigs,feeds,sales,logs,expenses,incomes,reproductions,stock,allData}){
+function ProfitLossAnalysis({pigs,feeds,sales,logs,expenses,incomes,reproductions,stock,allData,capital}){
   const [tab,setTab]=useState("overview");
   const active=pigs.filter(p=>p.status==="active");
   const sold=pigs.filter(p=>p.status==="sold");
 
-  // Financial totals
+  // Financial totals — single source of truth via calcPnL
+  const {totalInc:totalIncome,totalExp:totalExpense,profit:realizedProfit}=calcPnL(capital||{transactions:[]},feeds,sales,expenses,incomes);
+  // Array-based breakdowns for detail display
   const totalSaleInc=sales.reduce((s,l)=>s+(l.total||0),0);
   const totalOtherInc=incomes.reduce((s,l)=>s+(l.amount||0),0);
-  const totalIncome=totalSaleInc+totalOtherInc;
   const totalFeedCost=feeds.reduce((s,l)=>s+(l.cost||0),0);
   const totalOtherExp=expenses.reduce((s,l)=>s+(l.amount||0),0);
-  const totalExpense=totalFeedCost+totalOtherExp;
-  const realizedProfit=totalIncome-totalExpense;
 
   // Unsold herd estimated value
   const herdValue=active.reduce((s,pig)=>s+getMarketPrice(pig.stage,pig.weight),0);
@@ -1231,13 +1253,11 @@ function Ledger({expenses,setExpenses,incomes,setIncomes,feeds,sales,capital,set
   const [iForm,setIForm]=useState({date:toDay(),category:"Pig Sale",amount:"",description:""});
   const [eSaved,setESaved]=useState(false);const [iSaved,setISaved]=useState(false);
   const [editItem,setEditItem]=useState(null);
+  const {totalInc:totalIncome,totalExp:totalExpense,profit}=calcPnL(capital||{transactions:[]},feeds,sales,expenses,incomes);
   const totalSaleInc=sales.reduce((s,l)=>s+(l.total||0),0);
   const totalOtherInc=incomes.reduce((s,l)=>s+(l.amount||0),0);
-  const totalIncome=totalSaleInc+totalOtherInc;
   const totalFeedCost=feeds.reduce((s,l)=>s+(l.cost||0),0);
   const totalOtherExp=expenses.reduce((s,l)=>s+(l.amount||0),0);
-  const totalExpense=totalFeedCost+totalOtherExp;
-  const profit=totalIncome-totalExpense;
   const allTx=[...sales.map(s=>({id:s.id,date:s.date,type:"income",cat:"Pig Sale",desc:`${s.buyer||"Buyer"} — ${s.weight||0}kg`,amount:s.total,src:"sale"})),...incomes.map(i=>({...i,type:"income",cat:i.category,src:"income",desc:i.description})),...feeds.map(f=>({id:f.id,date:f.date,type:"expense",cat:"Feed Purchase",desc:`${f.feedType} ${f.kg}kg — ${f.worker}`,amount:f.cost,src:"feed"})),...expenses.map(e=>({...e,type:"expense",cat:e.category,src:"expense",desc:e.description}))].sort((a,b)=>(b.date||"").localeCompare(a.date||""));
 
   function addExpense(){
@@ -1932,15 +1952,15 @@ function App(){
           }}>✓ Review Now →</button>
         </div>
       )}
-      {isAdmin&&page==="bigdata"&&<BigData pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} users={users}/>}
+      {isAdmin&&page==="bigdata"&&<BigData pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} users={users} capital={capital}/>}
       {isAdmin&&page==="home"&&<AHome pigs={pigs} feeds={feeds} sales={sales} logs={logs} users={users} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} allData={allData} setPage={setPage} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="ai"&&<AIAdvisor pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
-      {isAdmin&&page==="pnl"&&<ProfitLossAnalysis pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} allData={allData}/>}
-      {isAdmin&&page==="market"&&<RwandaMarket pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
+      {isAdmin&&page==="pnl"&&<ProfitLossAnalysis pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} allData={allData} capital={capital}/>}
+      {isAdmin&&page==="market"&&<RwandaMarket pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} capital={capital}/>}
       {isAdmin&&page==="reproduction"&&<ReproductionModule pigs={pigs} reproductions={reproductions} setReproductions={setReproductions} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} stock={stock} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="stock"&&<StockManager stock={stock} setStock={setStock} feeds={feeds} pigs={pigs} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="ledger"&&<Ledger expenses={expenses} setExpenses={setExpenses} incomes={incomes} setIncomes={setIncomes} feeds={feeds} sales={sales} capital={capital} setCapital={setCapital}/>}
-      {isAdmin&&page==="finance"&&<Fin feeds={feeds} sales={sales} pigs={pigs} logs={logs} expenses={expenses} incomes={incomes} allData={allData}/>}
+      {isAdmin&&page==="finance"&&<Fin feeds={feeds} sales={sales} pigs={pigs} logs={logs} expenses={expenses} incomes={incomes} allData={allData} capital={capital}/>}
       {isAdmin&&page==="pigs"&&<Pigs pigs={pigs} setPigs={setPigs} logs={logs} allData={allData} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="feeding"&&<FeedLog feeds={feeds} setFeeds={setFeeds} pigs={pigs} logs={logs} sales={sales} expenses={expenses} incomes={incomes} allData={allData} user={user}/>}
       {isAdmin&&page==="sales"&&<SaleLog sales={sales} setSales={setSales} pigs={pigs} feeds={feeds} logs={logs} expenses={expenses} incomes={incomes} allData={allData} user={user}/>}
@@ -1971,7 +1991,7 @@ function App(){
 /* ═══════════════════════════════════════════════════
    BIG DATA ANALYTICS
 ═══════════════════════════════════════════════════ */
-function BigData({pigs,feeds,sales,logs,expenses,incomes,reproductions,stock,users}){
+function BigData({pigs,feeds,sales,logs,expenses,incomes,reproductions,stock,users,capital}){
   const [tab,setTab]=useState("overview");
   const tabs=[
     {id:"overview",l:"📊 Overview"},
@@ -1985,9 +2005,7 @@ function BigData({pigs,feeds,sales,logs,expenses,incomes,reproductions,stock,use
   /* ── Derived data ── */
   const active=pigs.filter(p=>p.status==="active");
   const sold=pigs.filter(p=>p.status==="sold");
-  const totalInc=sales.reduce((s,l)=>s+(l.total||0),0)+incomes.reduce((s,l)=>s+(l.amount||0),0);
-  const totalExp=feeds.reduce((s,l)=>s+(l.cost||0),0)+expenses.reduce((s,l)=>s+(l.amount||0),0);
-  const profit=totalInc-totalExp;
+  const {totalInc,totalExp,profit}=calcPnL(capital||{transactions:[]},feeds,sales,expenses,incomes);
   const herdVal=active.reduce((s,p)=>s+getMarketPrice(p.stage,p.weight),0);
   const workers=users.filter(u=>u.role==="worker"&&u.approved);
 
@@ -2041,7 +2059,8 @@ function BigData({pigs,feeds,sales,logs,expenses,incomes,reproductions,stock,use
   const pregnant=reproductions.filter(r=>r.status==="pregnant");
   const totalPiglets=farrowed.reduce((s,r)=>s+(r.piglets||0),0);
   const avgLitter=farrowed.length>0?(totalPiglets/farrowed.length).toFixed(1):0;
-  const conceptionRate=reproductions.length>0?((farrowed.length/Math.max(reproductions.length,1))*100).toFixed(1):0;
+  const totalMatings=reproductions.length;
+  const conceptionRate=totalMatings>0?((farrowed.length/totalMatings)*100).toFixed(1):0;
 
   /* ── Simple bar chart renderer ── */
   function MiniBar({values,labels,color,maxVal,prefix="RWF "}){
@@ -3175,7 +3194,7 @@ function Login({users,setUsers,setUser}){
 }
 
 /* ─── Rwanda Market ─── */
-function RwandaMarket({pigs,feeds,sales,logs,expenses,incomes,reproductions,stock}){
+function RwandaMarket({pigs,feeds,sales,logs,expenses,incomes,reproductions,stock,capital}){
   const active=pigs.filter(p=>p.status==="active");
   const [weather,setWeather]=useState(null);
   const [weatherErr,setWeatherErr]=useState(false);
@@ -3392,7 +3411,7 @@ function RwandaMarket({pigs,feeds,sales,logs,expenses,incomes,reproductions,stoc
 
     {/* ── AI Market Advice ── */}
     <AIPrediction pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}
-      topic={`Rwanda pig market advisor. Herd value=${fmtRWF(herdVal)}, ready to sell=${ready80.length} pigs, profit=${fmtRWF(totalInc-totalExp)}. Give: 1) best time to sell now, 2) which pigs to sell first, 3) price negotiation tips for Rwanda markets, 4) seasonal price trends, 5) how to get best price at ${MARKETS[0]}.`}
+      topic={`Rwanda pig market advisor. Herd value=${fmtRWF(herdVal)}, ready to sell=${ready80.length} pigs, profit=${fmtRWF(calcPnL(capital||{transactions:[]},feeds,sales,expenses,incomes).profit)}. Give: 1) best time to sell now, 2) which pigs to sell first, 3) price negotiation tips for Rwanda markets, 4) seasonal price trends, 5) how to get best price at ${MARKETS[0]}.`}
       label="🤖 AI Market Strategy" icon="📈"/>
   </div>);
 }
@@ -3400,9 +3419,7 @@ function RwandaMarket({pigs,feeds,sales,logs,expenses,incomes,reproductions,stoc
 /* ─── Admin Home ─── */
 function AHome({pigs,feeds,sales,logs,users,expenses,incomes,reproductions,stock,allData,setPage,capital,setCapital}){
   const active=pigs.filter(p=>p.status==="active");
-  const totalInc=sales.reduce((s,l)=>s+(l.total||0),0)+incomes.reduce((s,l)=>s+(l.amount||0),0);
-  const totalExp=feeds.reduce((s,l)=>s+(l.cost||0),0)+expenses.reduce((s,l)=>s+(l.amount||0),0);
-  const profit=totalInc-totalExp;
+  const {totalInc,totalExp,profit}=calcPnL(capital||{transactions:[]},feeds,sales,expenses,incomes);
   const herdValue=active.reduce((s,pig)=>s+getMarketPrice(pig.stage,pig.weight),0);
   const pregnant=reproductions.filter(r=>r.status==="pregnant");
   const lowStock=stock.filter(s=>s.quantity<=s.minLevel);
@@ -3482,14 +3499,14 @@ function AHome({pigs,feeds,sales,logs,users,expenses,incomes,reproductions,stock
 }
 
 /* ─── Financials ─── */
-function Fin({feeds,sales,pigs,logs,expenses,incomes,allData}){
+function Fin({feeds,sales,pigs,logs,expenses,incomes,allData,capital}){
+  // Use calcPnL for consistent totals across all screens
+  const {totalInc:totalIncome,totalExp:totalExpense,profit}=calcPnL(capital||{transactions:[]},feeds,sales,expenses,incomes);
+  // Keep array-based breakdowns for the detail cards (feed vs other, sales vs other)
   const totalSaleInc=sales.reduce((s,l)=>s+(l.total||0),0);
   const totalOtherInc=incomes.reduce((s,l)=>s+(l.amount||0),0);
-  const totalIncome=totalSaleInc+totalOtherInc;
   const totalFeedCost=feeds.reduce((s,l)=>s+(l.cost||0),0);
   const totalOtherExp=expenses.reduce((s,l)=>s+(l.amount||0),0);
-  const totalExpense=totalFeedCost+totalOtherExp;
-  const profit=totalIncome-totalExpense;
   const roi=totalExpense>0?((profit/totalExpense)*100).toFixed(1):"—";
   const months={};
   [...sales.map(s=>({date:s.date,rev:s.total,cost:0})),...incomes.map(i=>({date:i.date,rev:i.amount,cost:0})),...feeds.map(f=>({date:f.date,rev:0,cost:f.cost})),...expenses.map(e=>({date:e.date,rev:0,cost:e.amount}))].forEach(l=>{const m=l.date&&l.date.slice(0,7);if(!m)return;if(!months[m])months[m]={rev:0,cost:0};months[m].rev+=l.rev;months[m].cost+=l.cost;});
@@ -3876,7 +3893,7 @@ function SaleLog({sales,setSales,pigs,feeds,logs,expenses,incomes,allData,user})
                 <div><label style={S.lbl}>Date</label><input type="date" value={editForm.date} onChange={e=>setEditForm({...editForm,date:e.target.value})} style={S.inp}/></div>
               </div>
               <div style={{display:"flex",gap:8}}>
-                <button onClick={()=>{setSales(p=>p.map(x=>x.id===s.id?{...x,...editForm,weight:parseFloat(editForm.weight)||x.weight,priceKg:parseFloat(editForm.priceKg)||x.priceKg,total:parseFloat(editForm.weight||x.weight)*parseFloat(editForm.priceKg||x.priceKg)}:x));setEditId(null);setEditForm(null);}} style={{...S.btn(C.accent),flex:1,padding:"7px",fontSize:12}}>✓ Save</button>
+                <button onClick={()=>{setSales(p=>p.map(x=>{if(x.id!==s.id)return x;const w=parseFloat(editForm.weight||x.weight)||x.weight;const pk=parseFloat(editForm.priceKg||x.priceKg)||x.priceKg;return{...x,...editForm,weight:w,priceKg:pk,total:Math.round(w*pk)};}));setEditId(null);setEditForm(null);}} style={{...S.btn(C.accent),flex:1,padding:"7px",fontSize:12}}>✓ Save</button>
                 <button onClick={()=>{setEditId(null);setEditForm(null);}} style={{...S.btn("#374151"),flex:1,padding:"7px",fontSize:12}}>Cancel</button>
               </div>
             </div>
@@ -4338,16 +4355,23 @@ function SEntry({user,pigs,setPigs,sales,setSales,capital,setCapital}){
   const [toast,setToast]=useState(null);
   const closeToast=useCallback(()=>setToast(null),[]);
   const active=pigs.filter(p=>p.status==="active");
-  function upd(f){return f.weight&&f.priceKg?{...f,total:(parseFloat(f.weight)*parseFloat(f.priceKg)).toString()}:f;}
+  function upd(f){
+    const w=parseFloat(f.weight)||0;
+    const p=parseFloat(f.priceKg)||0;
+    if(w>0&&p>0) return {...f,total:String(Math.round(w*p))};
+    return f;
+  }
   async function doSave(){
     setConfirm(false);
-    const newSale={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:parseFloat(form.total)};
+    const calcTotal=parseFloat(form.weight)*parseFloat(form.priceKg)||0;
+    const finalTotal=parseFloat(form.total)||calcTotal;
+    const newSale={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:Math.round(finalTotal)};
     // Update sales list and sync to Firestore
     setSales(p=>{const updated=[...p,newSale];fsSet("sales",updated);return updated;});
     // Mark pig as sold and sync pigs to Firestore
     if(form.pigId) setPigs(p=>{const updated=p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig);fsSet("pigs",updated);return updated;});
     // Record capital income
-    if(setCapital) capitalTx(capital,setCapital,{type:"income",category:"Pig Sale",amount:newSale.total,description:`${selPig?selPig.tag+", ":""}${form.weight}kg @ RWF ${form.priceKg}/kg to ${form.buyer||"buyer"}`,date:toDay()});
+    if(setCapital) capitalTx(capital,setCapital,{type:"income",category:"Pig Sale",amount:Math.round(finalTotal),description:`${selPig?selPig.tag+", ":""}${form.weight}kg @ RWF ${form.priceKg}/kg to ${form.buyer||"buyer"}`,date:toDay()});
     try{
       await jbinAppend("sales",newSale);
       setToast({type:"success",message:`Sale of RWF ${Math.round(newSale.total).toLocaleString()} recorded!`});
@@ -4387,7 +4411,8 @@ function BEntry({user,expenses,setExpenses,capital,setCapital}){
 
   const qty=parseFloat(form.quantity)||0;
   const unitPrice=parseFloat(form.unitPrice)||0;
-  const total=form.totalAmount?parseFloat(form.totalAmount):qty>0&&unitPrice>0?qty*unitPrice:0;
+  const _manualTotal=parseFloat(form.totalAmount)||0;
+  const total=_manualTotal>0?_manualTotal:qty>0&&unitPrice>0?Math.round(qty*unitPrice):0;
 
   function updateCalc(f){
     const q=parseFloat(f.quantity)||0;
