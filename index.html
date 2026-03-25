@@ -24,12 +24,16 @@ select option{background:#fff;color:#1e293b;}
 @keyframes spin{to{transform:rotate(360deg);}}
 @keyframes glow{0%,100%{box-shadow:0 0 10px rgba(22,163,74,.08);}50%{box-shadow:0 0 20px rgba(22,163,74,.18);}}
 @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.6;}}
+@keyframes slideUp{from{opacity:0;transform:translateY(16px);}to{opacity:1;transform:translateY(0);}}
 .spin{animation:spin .9s linear infinite;display:inline-block;}
 .fade-in{animation:fadeIn .35s ease both;}
+.slide-up{animation:slideUp .4s ease both;}
 .ai-glow{animation:glow 3s ease-in-out infinite;}
 .live-pulse{animation:pulse 2s ease-in-out infinite;}
 #pdf-frame{display:none;}
 @media print{body>*{display:none!important;}#pdf-frame{display:block!important;position:fixed;top:0;left:0;width:100%;height:100%;background:#fff;z-index:99999;}}
+/* Enhanced card hover effect */
+
 </style>
 </head>
 <body>
@@ -1073,20 +1077,52 @@ function StockManager({stock,setStock,feeds,pigs,capital,setCapital}){
 /* ─── PROFIT & LOSS ANALYSIS ─── */
 function ProfitLossAnalysis({pigs,feeds,sales,logs,expenses,incomes,reproductions,stock,allData,capital}){
   const [tab,setTab]=useState("overview");
+  const [period,setPeriod]=useState("all");
   const active=pigs.filter(p=>p.status==="active");
   const sold=pigs.filter(p=>p.status==="sold");
 
+  // Period filter
+  const now=new Date();
+  function inPeriod(dateStr){
+    if(period==="all"||!dateStr) return true;
+    const d=new Date(dateStr);
+    if(period==="thisMonth") return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();
+    if(period==="lastMonth"){const lm=new Date(now);lm.setMonth(now.getMonth()-1);return d.getMonth()===lm.getMonth()&&d.getFullYear()===lm.getFullYear();}
+    if(period==="thisYear") return d.getFullYear()===now.getFullYear();
+    if(period==="last30"){const cutoff=new Date(now);cutoff.setDate(now.getDate()-30);return d>=cutoff;}
+    if(period==="last90"){const cutoff=new Date(now);cutoff.setDate(now.getDate()-90);return d>=cutoff;}
+    return true;
+  }
+
+  const fSales=sales.filter(s=>inPeriod(s.date));
+  const fIncomes=incomes.filter(i=>inPeriod(i.date));
+  const fFeeds=feeds.filter(f=>inPeriod(f.date));
+  const fExpenses=expenses.filter(e=>inPeriod(e.date));
+
   // Financial totals — single source of truth via calcPnL
-  const {totalInc:totalIncome,totalExp:totalExpense,profit:realizedProfit}=calcPnL(capital||{transactions:[]},feeds,sales,expenses,incomes);
+  const {totalInc:totalIncome,totalExp:totalExpense,profit:realizedProfit}=calcPnL(capital||{transactions:[]},fFeeds,fSales,fExpenses,fIncomes);
   // Array-based breakdowns for detail display
-  const totalSaleInc=sales.reduce((s,l)=>s+(l.total||0),0);
-  const totalOtherInc=incomes.reduce((s,l)=>s+(l.amount||0),0);
-  const totalFeedCost=feeds.reduce((s,l)=>s+(l.cost||0),0);
-  const totalOtherExp=expenses.reduce((s,l)=>s+(l.amount||0),0);
+  const totalSaleInc=fSales.reduce((s,l)=>s+(l.total||0),0);
+  const totalOtherInc=fIncomes.reduce((s,l)=>s+(l.amount||0),0);
+  const totalFeedCost=fFeeds.reduce((s,l)=>s+(l.cost||0),0);
+  const totalVetCost=fExpenses.filter(e=>e.category==="Veterinary"||e.category==="Medicine").reduce((s,e)=>s+(e.amount||0),0);
+  const totalLabourCost=fExpenses.filter(e=>e.category==="Labour").reduce((s,e)=>s+(e.amount||0),0);
+  const totalOtherExp=fExpenses.reduce((s,l)=>s+(l.amount||0),0);
+
+  // Margins and ratios
+  const grossMargin=totalIncome>0?((totalIncome-totalFeedCost)/totalIncome*100).toFixed(1):0;
+  const netMargin=totalIncome>0?((realizedProfit/totalIncome)*100).toFixed(1):0;
+  const roi=totalExpense>0?((realizedProfit/totalExpense)*100).toFixed(1):0;
+  const expenseRatio=totalIncome>0?((totalExpense/totalIncome)*100).toFixed(1):0;
+  const feedPct=totalExpense>0?((totalFeedCost/totalExpense)*100).toFixed(1):0;
+
+  // Break-even analysis
+  const avgSalePrice=fSales.length>0?Math.round(fSales.reduce((s,l)=>s+(l.total||0),0)/fSales.length):0;
+  const avgCostPerSale=fSales.length>0?Math.round(totalExpense/fSales.length):0;
+  const pigsToBreakEven=avgSalePrice>avgCostPerSale&&avgSalePrice>0?Math.ceil(totalExpense/avgSalePrice):null;
 
   // Unsold herd estimated value
   const herdValue=active.reduce((s,pig)=>s+getMarketPrice(pig.stage,pig.weight),0);
-  // Allocate costs to unsold pigs (proportional by count)
   const totalPigs=pigs.length||1;
   const costPerPig=totalExpense/totalPigs;
   const allocatedCostUnsold=active.length*costPerPig;
@@ -1096,152 +1132,338 @@ function ProfitLossAnalysis({pigs,feeds,sales,logs,expenses,incomes,reproduction
   const totalPortfolioValue=totalIncome+herdValue;
   const totalPortfolioPnL=totalPortfolioValue-totalExpense;
 
+  // Monthly trend (last 6 months)
+  function getMonths6(){const m=[];for(let i=5;i>=0;i--){const d=new Date();d.setMonth(d.getMonth()-i);m.push(d.toISOString().slice(0,7));}return m;}
+  const months6=getMonths6();
+  const monthlyData=months6.map(m=>({
+    m,
+    inc:fSales.filter(s=>(s.date||"").startsWith(m)).reduce((s,l)=>s+(l.total||0),0)+fIncomes.filter(i=>(i.date||"").startsWith(m)).reduce((s,l)=>s+(l.amount||0),0),
+    exp:fFeeds.filter(f=>(f.date||"").startsWith(m)).reduce((s,l)=>s+(l.cost||0),0)+fExpenses.filter(e=>(e.date||"").startsWith(m)).reduce((s,l)=>s+(l.amount||0),0),
+  }));
+  const maxMonthly=Math.max(...monthlyData.map(d=>Math.max(d.inc,d.exp)),1);
+
   // 30-day forecast
-  const avgMonthlyInc=totalIncome/(Math.max(1,new Set(sales.map(s=>s.date?.slice(0,7))).size)||1);
-  const avgMonthlyExp=totalExpense/(Math.max(1,new Set(feeds.map(f=>f.date?.slice(0,7))).size)||1);
+  const avgMonthlyExp=totalExpense/(Math.max(1,new Set(fFeeds.map(f=>f.date?.slice(0,7))).size)||1);
   const ready80=active.filter(p=>p.weight>=80);
   const almostReady=active.filter(p=>p.weight>=65&&p.weight<80);
   const potentialRevenue30=ready80.reduce((s,p)=>s+getMarketPrice(p.stage,p.weight),0);
-  const expectedExp30=avgMonthlyExp||totalExpense/Math.max(1,feeds.length)*30;
+  const expectedExp30=avgMonthlyExp||totalExpense/Math.max(1,fFeeds.length)*30;
   const forecast30Profit=potentialRevenue30-expectedExp30;
   const pregnant=(reproductions||[]).filter(r=>r.status==="pregnant");
   const farrowingsNext30=pregnant.filter(r=>daysDiff(r.expectedFarrow)>=0&&daysDiff(r.expectedFarrow)<=30);
-  const expectedPigletValue=farrowingsNext30.length*10*10000;// 10 piglets avg × RWF 10,000
+  const expectedPigletValue=farrowingsNext30.length*10*10000;
 
-  const tabs=["overview","sold","unsold","30day"];
+  // Expense by category
+  const expByCat={};
+  fFeeds.forEach(f=>{expByCat["Feed Purchase"]=(expByCat["Feed Purchase"]||0)+(f.cost||0);});
+  fExpenses.forEach(e=>{expByCat[e.category]=(expByCat[e.category]||0)+(e.amount||0);});
+  const sortedExpCats=Object.entries(expByCat).sort((a,b)=>b[1]-a[1]);
+
+  const tabs=["overview","breakdown","sold","unsold","30day","trend"];
 
   return(<div>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12,flexWrap:"wrap",gap:10}}>
       <div>
         <div style={S.h1}>💹 Profit & Loss Analysis</div>
-        <div style={S.sub}>Full P&L for sold pigs, active herd, 30-day forecast</div>
+        <div style={S.sub}>Full P&L · break-even · margins · 30-day forecast</div>
       </div>
-      <PDFBtn label="P&L Report" type="pnl" getData={()=>allData} icon="💹" color="#374151"/>
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        <select value={period} onChange={e=>setPeriod(e.target.value)} style={{...S.inp,width:"auto",fontSize:12,padding:"7px 11px"}}>
+          {[["all","All Time"],["thisMonth","This Month"],["lastMonth","Last Month"],["last30","Last 30 Days"],["last90","Last 90 Days"],["thisYear","This Year"]].map(([v,l])=><option key={v} value={v}>{l}</option>)}
+        </select>
+        <PDFBtn label="P&L PDF" type="pnl" getData={()=>allData} icon="💹" color="#374151"/>
+      </div>
+    </div>
+
+    {/* Key metrics banner */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:10,marginBottom:14}}>
+      {[
+        {l:"Net Profit",v:fmtRWF(realizedProfit),c:realizedProfit>=0?C.accent:C.red,bg:realizedProfit>=0?"rgba(22,163,74,.06)":"rgba(239,68,68,.06)"},
+        {l:"Net Margin",v:netMargin+"%",c:parseFloat(netMargin)>=20?C.accent:parseFloat(netMargin)>=0?C.amber:C.red,bg:"rgba(245,158,11,.04)"},
+        {l:"Gross Margin",v:grossMargin+"%",c:C.blue,bg:"rgba(37,99,235,.04)"},
+        {l:"ROI",v:roi+"%",c:C.purple,bg:"rgba(124,58,237,.04)"},
+        {l:"Total Income",v:fmtRWF(totalIncome),c:"#10b981",bg:"rgba(16,185,129,.04)"},
+        {l:"Total Expenses",v:fmtRWF(totalExpense),c:C.red,bg:"rgba(239,68,68,.04)"},
+        {l:"Herd Value",v:fmtRWF(herdValue),c:C.purple,bg:"rgba(124,58,237,.04)"},
+        {l:"Portfolio P&L",v:fmtRWF(totalPortfolioPnL),c:totalPortfolioPnL>=0?C.accent:C.red,bg:totalPortfolioPnL>=0?"rgba(22,163,74,.06)":"rgba(239,68,68,.06)"},
+      ].map(s=>(
+        <div key={s.l} style={{background:s.bg,border:"1px solid "+C.border,borderRadius:11,padding:"12px 14px"}}>
+          <div style={{fontSize:10,color:C.faint,textTransform:"uppercase",letterSpacing:.5,marginBottom:5}}>{s.l}</div>
+          <div style={{fontSize:15,fontWeight:800,color:s.c}}>{s.v}</div>
+        </div>
+      ))}
+    </div>
+
+    {/* Income vs Expense visual bar */}
+    <div style={{...S.card,padding:"14px 16px",marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+        <span style={{fontSize:12,fontWeight:700,color:C.text}}>Income vs Expenses Ratio</span>
+        <span style={{fontSize:12,fontWeight:700,color:realizedProfit>=0?C.accent:C.red}}>{realizedProfit>=0?"✅ Profitable":"⚠️ Running at loss"} · Expense ratio: {expenseRatio}%</span>
+      </div>
+      <div style={{height:14,background:C.elevated,borderRadius:8,overflow:"hidden",marginBottom:4,display:"flex"}}>
+        {totalIncome>0&&<div style={{height:"100%",width:Math.min((totalExpense/totalIncome)*100,100)+"%",background:totalExpense>totalIncome?"linear-gradient(90deg,#ef4444,#dc2626)":"linear-gradient(90deg,#f59e0b,#d97706)",borderRadius:8,transition:"width .5s"}}/>}
+      </div>
+      <div style={{display:"flex",gap:16,fontSize:11,color:C.faint}}>
+        <span style={{color:"#10b981"}}>● Income: {fmtRWF(totalIncome)}</span>
+        <span style={{color:C.red}}>● Expenses: {fmtRWF(totalExpense)}</span>
+        <span style={{color:realizedProfit>=0?C.accent:C.red}}>● Net: {fmtRWF(realizedProfit)}</span>
+      </div>
     </div>
 
     {/* Tabs */}
-    <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border}}>
-      {[["overview","📊 Overview"],["sold","💚 Sold Pigs"],["unsold","🐷 Unsold (Active)"],["30day","📅 30-Day Forecast"]].map(([t,l])=>(
+    <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border,flexWrap:"wrap"}}>
+      {[["overview","📊 Overview"],["breakdown","📂 Cost Breakdown"],["sold","💚 Sold Pigs"],["unsold","🐷 Active Herd"],["30day","📅 30-Day Forecast"],["trend","📈 Monthly Trend"]].map(([t,l])=>(
         <button key={t} style={S.tab(tab===t)} onClick={()=>setTab(t)}>{l}</button>
       ))}
     </div>
 
     {tab==="overview"&&(<div>
-      <div style={S.g4}>
-        {[{l:"Realized Income",v:fmtRWF(totalIncome),c:"#10b981"},{l:"Total Expenses",v:fmtRWF(totalExpense),c:C.red},{l:"Realized P&L",v:fmtRWF(realizedProfit),c:realizedProfit>=0?C.accent:C.red},{l:"Herd Asset Value",v:fmtRWF(herdValue),c:C.purple}].map(s=>(
-          <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c,fontSize:16}}>{s.v}</div></div>
-        ))}
-      </div>
-      {/* Portfolio summary card */}
-      <div style={{...S.card,background:totalPortfolioPnL>=0?"rgba(22,163,74,.05)":"rgba(239,68,68,.05)",border:"1px solid "+(totalPortfolioPnL>=0?"rgba(22,163,74,.25)":"rgba(239,68,68,.25)")}}>
-        <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:16}}>📊 Full Portfolio P&L Summary</div>
-        {[["💚 Realized Income (from sales)",fmtRWF(totalIncome),"10b981"],["🔴 Total Farm Expenses",fmtRWF(totalExpense),C.red.slice(1)],["━ Realized Net Profit",fmtRWF(realizedProfit),realizedProfit>=0?"16c784":"ef4444"],["🐷 Active Herd Market Value",fmtRWF(herdValue),"a78bfa"],["━ Est. Cost Allocated to Unsold Pigs",fmtRWF(allocatedCostUnsold),"f59e0b"],["━ Unrealized Gain/Loss (Herd)",fmtRWF(unrealizedPnL),unrealizedPnL>=0?"16c784":"ef4444"]].map(([l,v,c])=>(
-          <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid "+C.elevated}}>
-            <span style={{color:C.muted,fontSize:13}}>{l}</span>
-            <span style={{fontWeight:700,color:"#"+c.replace("#",""),fontSize:13}}>{v}</span>
+      {/* P&L statement */}
+      <div style={{...S.card,background:totalPortfolioPnL>=0?"rgba(22,163,74,.03)":"rgba(239,68,68,.03)",border:"1px solid "+(totalPortfolioPnL>=0?"rgba(22,163,74,.2)":"rgba(239,68,68,.2)")}}>
+        <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:14,paddingBottom:10,borderBottom:"2px solid "+(totalPortfolioPnL>=0?"rgba(22,163,74,.2)":"rgba(239,68,68,.2)")}}>📊 Profit & Loss Statement</div>
+        {[
+          {l:"🏷️ Pig Sale Revenue",v:fmtRWF(totalSaleInc),c:"#10b981",indent:false},
+          {l:"💰 Other Income",v:fmtRWF(totalOtherInc),c:"#10b981",indent:false},
+          {l:"TOTAL REVENUE",v:fmtRWF(totalIncome),c:"#10b981",bold:true,bg:"rgba(16,185,129,.07)"},
+          {l:"🌾 Feed Costs",v:"("+fmtRWF(totalFeedCost)+")",c:C.red,indent:false},
+          {l:"💊 Vet & Medicine",v:"("+fmtRWF(totalVetCost)+")",c:C.red,indent:false},
+          {l:"👷 Labour",v:"("+fmtRWF(totalLabourCost)+")",c:C.red,indent:false},
+          {l:"📦 Other Expenses",v:"("+fmtRWF(totalOtherExp)+")",c:C.red,indent:false},
+          {l:"TOTAL EXPENSES",v:"("+fmtRWF(totalExpense)+")",c:C.red,bold:true,bg:"rgba(239,68,68,.07)"},
+          {l:"NET REALIZED PROFIT",v:fmtRWF(realizedProfit),c:realizedProfit>=0?C.accent:C.red,bold:true,bg:realizedProfit>=0?"rgba(22,163,74,.1)":"rgba(239,68,68,.1)"},
+          {l:"🐷 Herd Market Value (unrealized)",v:fmtRWF(herdValue),c:C.purple,indent:false},
+          {l:"TOTAL PORTFOLIO",v:fmtRWF(totalPortfolioPnL),c:totalPortfolioPnL>=0?C.accent:C.red,bold:true,bg:totalPortfolioPnL>=0?"rgba(22,163,74,.12)":"rgba(239,68,68,.12)"},
+        ].map(({l,v,c,bold,bg,indent})=>(
+          <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px "+(bg?"12px":"2px"),marginBottom:2,borderRadius:bg?7:0,background:bg||"transparent"}}>
+            <span style={{fontSize:bold?13:12,fontWeight:bold?700:400,color:bold?C.text:C.muted,paddingLeft:indent?14:0}}>{l}</span>
+            <span style={{fontSize:bold?14:13,fontWeight:bold?800:600,color:c}}>{v}</span>
           </div>
         ))}
-        <div style={{display:"flex",justifyContent:"space-between",marginTop:12,padding:"10px 14px",borderRadius:9,background:totalPortfolioPnL>=0?C.accentSoft:"rgba(239,68,68,.08)",border:"1px solid "+(totalPortfolioPnL>=0?"rgba(22,163,74,.3)":"rgba(239,68,68,.3)")}}>
-          <span style={{fontWeight:700,color:C.text,fontSize:14}}>🏆 TOTAL PORTFOLIO VALUE</span>
-          <span style={{fontWeight:800,color:totalPortfolioPnL>=0?C.accent:C.red,fontSize:16}}>{fmtRWF(totalPortfolioPnL)}</span>
+        <div style={{marginTop:10,padding:"9px 12px",background:"rgba(22,163,74,.05)",borderRadius:8,display:"flex",gap:16,flexWrap:"wrap"}}>
+          <span style={{fontSize:11,color:C.muted}}>Net Margin: <b style={{color:parseFloat(netMargin)>=0?C.accent:C.red}}>{netMargin}%</b></span>
+          <span style={{fontSize:11,color:C.muted}}>Gross Margin: <b style={{color:C.blue}}>{grossMargin}%</b></span>
+          <span style={{fontSize:11,color:C.muted}}>ROI: <b style={{color:C.purple}}>{roi}%</b></span>
+          <span style={{fontSize:11,color:C.muted}}>Feed as % of expenses: <b style={{color:C.amber}}>{feedPct}%</b></span>
         </div>
-        <div style={{fontSize:11,color:C.faint,marginTop:8}}>Portfolio = Realized P&L + Unrealized Herd Gain/Loss · ROI: {totalExpense>0?((totalPortfolioPnL/totalExpense)*100).toFixed(1):0}%</div>
       </div>
-      <AIPrediction pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} topic={`Full farm P&L analysis Rwanda: realized profit=${fmtRWF(realizedProfit)}, herd value=${fmtRWF(herdValue)}, total portfolio=${fmtRWF(totalPortfolioPnL)}. Give specific profit improvement actions, cost reduction strategies, investment advice for Rwanda pig farming.`} label="AI P&L Strategy" icon="💹"/>
+      {/* Break-even */}
+      {avgSalePrice>0&&<div style={{...S.card,border:"1px solid rgba(99,102,241,.2)",background:"rgba(99,102,241,.03)",marginTop:14}}>
+        <div style={{fontSize:13,fontWeight:700,color:"#6366f1",marginBottom:10}}>📐 Break-Even Analysis</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+          {[["Avg Sale/pig",fmtRWF(avgSalePrice)],["Avg Cost/pig",fmtRWF(avgCostPerSale)],["Pigs to break even",pigsToBreakEven!==null?pigsToBreakEven+" pigs":"N/A"]].map(([l,v])=>(
+            <div key={l} style={{background:C.elevated,borderRadius:8,padding:"9px 11px",textAlign:"center"}}>
+              <div style={{fontSize:10,color:C.faint,marginBottom:3}}>{l}</div>
+              <div style={{fontWeight:700,color:C.text,fontSize:14}}>{v}</div>
+            </div>
+          ))}
+        </div>
+        {pigsToBreakEven!==null&&<div style={{marginTop:10,fontSize:12,color:C.muted}}>
+          You need to sell approximately <b style={{color:"#6366f1"}}>{pigsToBreakEven} pigs</b> at current avg price to cover all expenses.
+          {fSales.length>=pigsToBreakEven?<span style={{color:C.accent}}> ✅ Already reached break-even ({fSales.length} sold)!</span>:<span style={{color:C.amber}}> {fSales.length}/{pigsToBreakEven} sales so far.</span>}
+        </div>}
+      </div>}
+      <AIPrediction pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} topic={`Full farm P&L analysis Rwanda: realized profit=${fmtRWF(realizedProfit)}, net margin=${netMargin}%, herd value=${fmtRWF(herdValue)}, ROI=${roi}%, feed is ${feedPct}% of expenses. Give specific profit improvement actions, cost reduction strategies, investment advice for Rwanda pig farming.`} label="AI P&L Strategy" icon="💹"/>
+    </div>)}
+
+    {tab==="breakdown"&&(<div>
+      <div style={S.card}>
+        <div style={{fontSize:13,fontWeight:700,color:C.red,marginBottom:14}}>🔴 Expense Breakdown by Category</div>
+        {sortedExpCats.length===0&&<div style={{color:C.faint,fontSize:13}}>No expenses recorded yet.</div>}
+        {sortedExpCats.map(([cat,amt])=>{
+          const pct=totalExpense>0?((amt/totalExpense)*100).toFixed(1):0;
+          return(<div key={cat} style={{marginBottom:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,fontSize:12}}>
+              <span style={{fontWeight:600,color:C.text}}>{cat}</span>
+              <span style={{color:C.red,fontWeight:700}}>{fmtRWF(amt)} <span style={{color:C.faint,fontWeight:400}}>({pct}%)</span></span>
+            </div>
+            <div style={{height:8,background:C.elevated,borderRadius:4,overflow:"hidden"}}>
+              <div style={{height:"100%",width:pct+"%",background:cat==="Feed Purchase"?"#f59e0b":cat==="Pig Purchase"?"#6366f1":cat==="Veterinary"||cat==="Medicine"?"#14b8a6":C.red,borderRadius:4,transition:"width .4s"}}/>
+            </div>
+          </div>);
+        })}
+        {totalExpense>0&&<div style={{marginTop:10,padding:"9px 13px",background:"rgba(239,68,68,.06)",borderRadius:8,display:"flex",justifyContent:"space-between"}}>
+          <span style={{color:C.muted,fontSize:13}}>Total Expenses</span>
+          <span style={{color:C.red,fontWeight:700}}>{fmtRWF(totalExpense)}</span>
+        </div>}
+      </div>
+      <div style={{...S.card,marginTop:14}}>
+        <div style={{fontSize:13,fontWeight:700,color:"#10b981",marginBottom:14}}>💚 Income Breakdown</div>
+        {[["🏷️ Pig Sales",totalSaleInc,totalIncome],["💰 Other Income",totalOtherInc,totalIncome]].map(([l,amt,total])=>{
+          const pct=total>0?((amt/total)*100).toFixed(1):0;
+          return(<div key={l} style={{marginBottom:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,fontSize:12}}>
+              <span style={{fontWeight:600,color:C.text}}>{l}</span>
+              <span style={{color:"#10b981",fontWeight:700}}>{fmtRWF(amt)} <span style={{color:C.faint,fontWeight:400}}>({pct}%)</span></span>
+            </div>
+            <div style={{height:8,background:C.elevated,borderRadius:4,overflow:"hidden"}}>
+              <div style={{height:"100%",width:pct+"%",background:"#10b981",borderRadius:4,transition:"width .4s"}}/>
+            </div>
+          </div>);
+        })}
+        {totalIncome>0&&<div style={{marginTop:10,padding:"9px 13px",background:"rgba(16,185,129,.06)",borderRadius:8,display:"flex",justifyContent:"space-between"}}>
+          <span style={{color:C.muted,fontSize:13}}>Total Income</span>
+          <span style={{color:"#10b981",fontWeight:700}}>{fmtRWF(totalIncome)}</span>
+        </div>}
+      </div>
     </div>)}
 
     {tab==="sold"&&(<div>
       <div style={{...S.card,marginBottom:14}}>
-        <div style={{fontSize:13,fontWeight:700,color:"#10b981",marginBottom:12}}>💚 Revenue from Sold Pigs</div>
-        <div style={S.g2}>
-          <div><div style={{fontSize:11,color:C.faint,marginBottom:4}}>Total Sale Revenue</div><div style={{fontSize:22,fontWeight:800,color:"#10b981"}}>{fmtRWF(totalSaleInc)}</div></div>
-          <div><div style={{fontSize:11,color:C.faint,marginBottom:4}}>Other Income</div><div style={{fontSize:22,fontWeight:800,color:C.accent}}>{fmtRWF(totalOtherInc)}</div></div>
+        <div style={{fontSize:13,fontWeight:700,color:"#10b981",marginBottom:12}}>💚 Revenue Summary</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+          {[["Pig Sales",fmtRWF(totalSaleInc),"#10b981"],["Other Income",fmtRWF(totalOtherInc),C.accent],["Avg per Sale",fSales.length>0?fmtRWF(Math.round(totalSaleInc/fSales.length)):"—","#10b981"]].map(([l,v,c])=>(
+            <div key={l} style={{background:C.elevated,borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
+              <div style={{fontSize:10,color:C.faint,marginBottom:3}}>{l}</div>
+              <div style={{fontWeight:700,color:c,fontSize:14}}>{v}</div>
+            </div>
+          ))}
         </div>
       </div>
       <div style={S.card}>
-        <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>📋 Individual Sale Records ({sales.length})</div>
-        {sales.length===0&&<div style={{color:C.faint,fontSize:13}}>No sales recorded yet.</div>}
-        {sales.slice().reverse().map((s,i)=>{
+        <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>📋 Sale Records ({fSales.length})</div>
+        {fSales.length===0&&<div style={{color:C.faint,fontSize:13}}>No sales recorded for this period.</div>}
+        {fSales.slice().reverse().map((s,i)=>{
           const pig=pigs.find(p=>p.id===s.pigId);
-          const profit=s.total-(costPerPig);
-          return(<div key={i} style={S.row}>
+          const estProfit=s.total-(costPerPig);
+          return(<div key={i} style={{...S.row,borderBottom:"1px solid "+C.elevated,paddingBottom:8,marginBottom:8}}>
             <div>
               <div style={{fontWeight:600,color:C.text}}>{pig?pig.tag:"Pig"} — {s.buyer||"Unknown buyer"}</div>
-              <div style={{fontSize:11,color:C.faint}}>{s.date} · {s.weight||0}kg @ RWF{fmtNum(s.priceKg)}/kg · Worker: {s.worker}</div>
+              <div style={{fontSize:11,color:C.faint}}>{s.date} · {s.weight||0}kg @ RWF {fmtNum(s.priceKg)}/kg · {s.worker}</div>
             </div>
             <div style={{textAlign:"right"}}>
-              <div style={{fontWeight:700,color:"#10b981"}}>{fmtRWF(s.total)}</div>
-              <div style={{fontSize:10,color:profit>=0?C.accent:C.red}}>Est. profit: {fmtRWF(profit)}</div>
+              <div style={{fontWeight:700,color:"#10b981",fontSize:14}}>{fmtRWF(s.total)}</div>
+              <div style={{fontSize:10,color:estProfit>=0?C.accent:C.red}}>Est. margin: {fmtRWF(estProfit)}</div>
             </div>
           </div>);
         })}
-        {sales.length>0&&<div style={{marginTop:10,padding:"9px 13px",background:"rgba(16,185,129,.06)",borderRadius:8,display:"flex",justifyContent:"space-between"}}>
-          <span style={{color:C.muted,fontSize:13}}>Total revenue from {sales.length} sale(s)</span>
+        {fSales.length>0&&<div style={{padding:"9px 13px",background:"rgba(16,185,129,.06)",borderRadius:8,display:"flex",justifyContent:"space-between"}}>
+          <span style={{color:C.muted,fontSize:13}}>Total · {fSales.length} sale(s)</span>
           <span style={{color:"#10b981",fontWeight:700}}>{fmtRWF(totalSaleInc)}</span>
         </div>}
       </div>
     </div>)}
 
     {tab==="unsold"&&(<div>
-      <div style={{...S.card,background:"rgba(167,139,250,.04)",border:"1px solid rgba(167,139,250,.2)"}}>
-        <div style={{fontSize:13,fontWeight:700,color:C.purple,marginBottom:12}}>🐷 Unsold (Active) Herd P&L</div>
-        {[["Active Pigs",active.length+" pigs"],["Current Market Value",fmtRWF(herdValue)],["Est. Cost Invested",fmtRWF(allocatedCostUnsold)],["Unrealized Gain/Loss",fmtRWF(unrealizedPnL)]].map(([l,v])=>(
-          <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid "+C.elevated}}>
-            <span style={{color:C.muted,fontSize:13}}>{l}</span>
-            <span style={{fontWeight:700,color:l.includes("Gain")?unrealizedPnL>=0?C.accent:C.red:C.text}}>{v}</span>
-          </div>
-        ))}
-        <div style={{marginTop:10,fontSize:11,color:C.faint}}>Cost allocated proportionally based on total farm expenses ÷ total pig count. Market values based on current Rwanda prices.</div>
+      <div style={{...S.card,background:"rgba(167,139,250,.04)",border:"1px solid rgba(167,139,250,.2)",marginBottom:14}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.purple,marginBottom:12}}>🐷 Active Herd Valuation</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:12}}>
+          {[["Active Pigs",active.length+" pigs","#94a3b8"],["Market Value",fmtRWF(herdValue),C.purple],["Est. Cost Invested",fmtRWF(allocatedCostUnsold),C.amber],["Unrealized Gain/Loss",fmtRWF(unrealizedPnL),unrealizedPnL>=0?C.accent:C.red]].map(([l,v,c])=>(
+            <div key={l} style={{background:C.elevated,borderRadius:8,padding:"10px 12px"}}>
+              <div style={{fontSize:10,color:C.faint,marginBottom:3}}>{l}</div>
+              <div style={{fontWeight:700,color:c,fontSize:14}}>{v}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{fontSize:11,color:C.faint}}>Cost allocated proportionally. Market values based on current Rwanda livestock prices.</div>
       </div>
       <div style={S.card}>
-        <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>Individual Pig P&L ({active.length} active)</div>
+        <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>Per-Pig Valuation ({active.length} active)</div>
         {active.length===0&&<div style={{color:C.faint,fontSize:13}}>No active pigs.</div>}
-        {active.sort((a,b)=>getMarketPrice(b.stage,b.weight)-getMarketPrice(a.stage,a.weight)).map((pig,i)=>{
+        {active.slice().sort((a,b)=>getMarketPrice(b.stage,b.weight)-getMarketPrice(a.stage,a.weight)).map((pig,i)=>{
           const val=getMarketPrice(pig.stage,pig.weight);
-          const pigCost=costPerPig;
-          const pigPnL=val-pigCost;
-          return(<div key={i} style={S.row}>
-            <div>
-              <div style={{fontWeight:600,color:C.text}}>🐷 {pig.tag} — {pig.stage} ({pig.breed})</div>
-              <div style={{fontSize:11,color:C.faint}}>{pig.weight}kg · {pig.gender} · {pig.status==="active"?"Active":pig.status}</div>
+          const pigPnL=val-costPerPig;
+          const pct=herdValue>0?((val/herdValue)*100).toFixed(0):0;
+          return(<div key={i} style={{marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+              <div>
+                <span style={{fontWeight:600,color:C.text,fontSize:13}}>🐷 {pig.tag}</span>
+                <span style={{fontSize:11,color:C.faint,marginLeft:7}}>{pig.stage} · {pig.weight}kg · {pig.breed}</span>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <span style={{fontWeight:700,color:C.purple,fontSize:13}}>{fmtRWF(val)}</span>
+                <span style={{fontSize:10,color:pigPnL>=0?C.accent:C.red,marginLeft:8}}>{pigPnL>=0?"+":""}{fmtRWF(pigPnL)}</span>
+              </div>
             </div>
-            <div style={{textAlign:"right"}}>
-              <div style={{fontWeight:700,color:C.purple}}>{fmtRWF(val)}</div>
-              <div style={{fontSize:10,color:pigPnL>=0?C.accent:C.red}}>P&L: {fmtRWF(pigPnL)}</div>
+            <div style={{height:5,background:C.elevated,borderRadius:3,overflow:"hidden"}}>
+              <div style={{height:"100%",width:pct+"%",background:C.purple,borderRadius:3}}/>
             </div>
           </div>);
         })}
         <div style={{marginTop:10,padding:"9px 13px",background:"rgba(167,139,250,.06)",borderRadius:8,display:"flex",justifyContent:"space-between"}}>
-          <span style={{color:C.muted,fontSize:13}}>Total herd potential value</span>
+          <span style={{color:C.muted,fontSize:13}}>Total herd market value</span>
           <span style={{color:C.purple,fontWeight:700}}>{fmtRWF(herdValue)}</span>
         </div>
       </div>
     </div>)}
 
     {tab==="30day"&&(<div>
-      <div style={{...S.card,background:"rgba(22,163,74,.04)",border:"1px solid rgba(22,163,74,.2)"}}>
+      <div style={{...S.card,background:"rgba(22,163,74,.04)",border:"1px solid rgba(22,163,74,.2)",marginBottom:14}}>
         <div style={{fontSize:15,fontWeight:700,color:C.accent,marginBottom:16}}>📅 30-Day Profit Forecast</div>
         {[
           ["🐷 Market-ready pigs (80kg+)",`${ready80.length} pigs`,C.accent],
           ["📦 Potential sale revenue (80kg+ pigs)",fmtRWF(potentialRevenue30),C.accent],
-          ["⏳ Almost ready (65–80kg)",`${almostReady.length} pigs will likely reach 80kg`,C.amber],
-          ["🐖 Expected farrowings in 30 days",`${farrowingsNext30.length} sow(s)`,C.pink],
-          ["🐷 Expected piglet revenue",fmtRWF(expectedPigletValue),C.pink],
-          ["🔴 Est. 30-day feed & operating costs",fmtRWF(expectedExp30),C.red],
-          ["━ 30-Day Net Forecast",fmtRWF(forecast30Profit+expectedPigletValue),forecast30Profit+expectedPigletValue>=0?C.accent:C.red],
+          ["⏳ Almost ready (65–80kg)",`${almostReady.length} pigs growing toward market`,C.amber],
+          ["🐖 Expected farrowings in 30 days",`${farrowingsNext30.length} sow(s) due`,C.pink],
+          ["🐷 Expected piglet income",fmtRWF(expectedPigletValue),C.pink],
+          ["🔴 Est. 30-day operating costs",fmtRWF(Math.round(expectedExp30)),C.red],
+          ["━ 30-Day Net Forecast",fmtRWF(Math.round(forecast30Profit+expectedPigletValue)),forecast30Profit+expectedPigletValue>=0?C.accent:C.red],
         ].map(([l,v,c])=>(
-          <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"9px 0",borderBottom:"1px solid "+C.elevated}}>
+          <div key={l} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid "+C.elevated}}>
             <span style={{color:C.muted,fontSize:13}}>{l}</span>
             <span style={{fontWeight:700,color:c,fontSize:13}}>{v}</span>
           </div>
         ))}
-        <div style={{marginTop:12,padding:"10px 14px",borderRadius:9,background:forecast30Profit+expectedPigletValue>=0?C.accentSoft:"rgba(239,68,68,.08)"}}>
-          <div style={{fontSize:13,color:C.muted,marginBottom:2}}>30-Day Total Opportunity</div>
-          <div style={{fontSize:20,fontWeight:800,color:forecast30Profit+expectedPigletValue>=0?C.accent:C.red}}>{fmtRWF(forecast30Profit+expectedPigletValue)}</div>
-          <div style={{fontSize:11,color:C.faint,marginTop:3}}>{forecast30Profit+expectedPigletValue>=0?"✅ Positive outlook — focus on selling market-ready pigs":"⚠️ Review costs and pricing strategy"}</div>
+        <div style={{marginTop:14,padding:"13px 16px",borderRadius:10,background:forecast30Profit+expectedPigletValue>=0?"rgba(22,163,74,.1)":"rgba(239,68,68,.08)",border:"1px solid "+(forecast30Profit+expectedPigletValue>=0?"rgba(22,163,74,.3)":"rgba(239,68,68,.3)")}}>
+          <div style={{fontSize:12,color:C.muted,marginBottom:3}}>30-Day Total Profit Opportunity</div>
+          <div style={{fontSize:24,fontWeight:800,color:forecast30Profit+expectedPigletValue>=0?C.accent:C.red}}>{fmtRWF(Math.round(forecast30Profit+expectedPigletValue))}</div>
+          <div style={{fontSize:12,color:C.faint,marginTop:5}}>{forecast30Profit+expectedPigletValue>=0?"✅ Positive outlook — prioritize selling market-ready pigs first":"⚠️ Review feed costs and consider faster selling"}</div>
         </div>
       </div>
-      <AIPrediction pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} topic={`30-day profit forecast Rwanda: ${ready80.length} pigs ready to sell (value=${fmtRWF(potentialRevenue30)}), ${farrowingsNext30.length} farrowings expected, operating costs=${fmtRWF(expectedExp30)}. Predict exact 30-day profit/loss, actions to maximize it, specific Rwanda market advice.`} label="AI 30-Day Profit Forecast" icon="📅"/>
+      <AIPrediction pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} topic={`30-day profit forecast Rwanda: ${ready80.length} pigs ready to sell (value=${fmtRWF(potentialRevenue30)}), ${farrowingsNext30.length} farrowings expected, net margin=${netMargin}%, operating costs=${fmtRWF(Math.round(expectedExp30))}. Predict exact 30-day profit/loss, specific actions to maximize it, Rwanda market price negotiation tips.`} label="AI 30-Day Profit Forecast" icon="📅"/>
+    </div>)}
+
+    {tab==="trend"&&(<div>
+      <div style={S.card}>
+        <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:14}}>📈 Monthly Income vs Expenses (Last 6 Months)</div>
+        {monthlyData.map(({m,inc,exp})=>{
+          const profit=inc-exp;
+          const label=m.split("-").length===2?["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(m.split("-")[1])-1]+" "+m.split("-")[0].slice(2):"—";
+          return(<div key={m} style={{marginBottom:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:4}}>
+              <span style={{fontWeight:600,color:C.text}}>{label}</span>
+              <span style={{color:profit>=0?C.accent:C.red,fontWeight:700}}>{profit>=0?"+"}{fmtRWF(profit)}</span>
+            </div>
+            <div style={{marginBottom:3}}>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.faint,marginBottom:2}}>
+                <span style={{color:"#10b981"}}>Income</span><span style={{color:"#10b981"}}>{fmtRWF(inc)}</span>
+              </div>
+              <div style={{height:7,background:C.elevated,borderRadius:4,overflow:"hidden"}}>
+                <div style={{height:"100%",width:(maxMonthly>0?(inc/maxMonthly)*100:0)+"%",background:"linear-gradient(90deg,#10b981,#059669)",borderRadius:4,transition:"width .5s"}}/>
+              </div>
+            </div>
+            <div>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.faint,marginBottom:2}}>
+                <span style={{color:C.red}}>Expenses</span><span style={{color:C.red}}>{fmtRWF(exp)}</span>
+              </div>
+              <div style={{height:7,background:C.elevated,borderRadius:4,overflow:"hidden"}}>
+                <div style={{height:"100%",width:(maxMonthly>0?(exp/maxMonthly)*100:0)+"%",background:"linear-gradient(90deg,#ef4444,#dc2626)",borderRadius:4,transition:"width .5s"}}/>
+              </div>
+            </div>
+          </div>);
+        })}
+        {monthlyData.every(d=>d.inc===0&&d.exp===0)&&<div style={{color:C.faint,fontSize:13,textAlign:"center",padding:20}}>No data for the last 6 months.</div>}
+      </div>
+      <div style={{...S.card,marginTop:14}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:10}}>Monthly Summary Table</div>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+          <thead><tr>{["Month","Income","Expenses","Profit","Margin"].map(h=><th key={h} style={{textAlign:"left",color:C.faint,paddingBottom:8,borderBottom:"1px solid "+C.border,fontSize:10,fontWeight:600,textTransform:"uppercase"}}>{h}</th>)}</tr></thead>
+          <tbody>
+            {monthlyData.filter(d=>d.inc>0||d.exp>0).sort((a,b)=>b.m.localeCompare(a.m)).map(({m,inc,exp})=>{
+              const p=inc-exp;
+              const mg=inc>0?((p/inc)*100).toFixed(0):"—";
+              const label=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(m.split("-")[1])-1]+" "+m.split("-")[0].slice(2);
+              return(<tr key={m} style={{borderBottom:"1px solid "+C.elevated}}>
+                <td style={{padding:"8px 0",color:C.muted}}>{label}</td>
+                <td style={{color:"#10b981",fontWeight:600}}>{fmtRWF(inc)}</td>
+                <td style={{color:C.red,fontWeight:600}}>{fmtRWF(exp)}</td>
+                <td style={{color:p>=0?C.accent:C.red,fontWeight:700}}>{fmtRWF(p)}</td>
+                <td style={{color:parseFloat(mg)>=20?C.accent:parseFloat(mg)>=0?C.amber:C.red,fontWeight:600}}>{mg}%</td>
+              </tr>);
+            })}
+          </tbody>
+        </table>
+        {monthlyData.every(d=>d.inc===0&&d.exp===0)&&<div style={{color:C.faint,fontSize:13,paddingTop:8}}>No monthly data yet.</div>}
+      </div>
     </div>)}
   </div>);
 }
@@ -1253,12 +1475,47 @@ function Ledger({expenses,setExpenses,incomes,setIncomes,feeds,sales,capital,set
   const [iForm,setIForm]=useState({date:toDay(),category:"Pig Sale",amount:"",description:""});
   const [eSaved,setESaved]=useState(false);const [iSaved,setISaved]=useState(false);
   const [editItem,setEditItem]=useState(null);
+  const [search,setSearch]=useState("");
+  const [filterType,setFilterType]=useState("all");
   const {totalInc:totalIncome,totalExp:totalExpense,profit}=calcPnL(capital||{transactions:[]},feeds,sales,expenses,incomes);
   const totalSaleInc=sales.reduce((s,l)=>s+(l.total||0),0);
   const totalOtherInc=incomes.reduce((s,l)=>s+(l.amount||0),0);
   const totalFeedCost=feeds.reduce((s,l)=>s+(l.cost||0),0);
   const totalOtherExp=expenses.reduce((s,l)=>s+(l.amount||0),0);
-  const allTx=[...sales.map(s=>({id:s.id,date:s.date,type:"income",cat:"Pig Sale",desc:`${s.buyer||"Buyer"} — ${s.weight||0}kg`,amount:s.total,src:"sale"})),...incomes.map(i=>({...i,type:"income",cat:i.category,src:"income",desc:i.description})),...feeds.map(f=>({id:f.id,date:f.date,type:"expense",cat:"Feed Purchase",desc:`${f.feedType} ${f.kg}kg — ${f.worker}`,amount:f.cost,src:"feed"})),...expenses.map(e=>({...e,type:"expense",cat:e.category,src:"expense",desc:e.description}))].sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  const margin=totalIncome>0?((profit/totalIncome)*100).toFixed(1):"—";
+
+  const allTx=[
+    ...sales.map(s=>({id:s.id,date:s.date,type:"income",cat:"Pig Sale",desc:`${s.buyer||"Buyer"} — ${s.weight||0}kg @ RWF ${s.priceKg||0}/kg`,amount:s.total,src:"sale",worker:s.worker})),
+    ...incomes.map(i=>({...i,type:"income",cat:i.category,src:"income",desc:i.description||i.category,worker:i.worker||"Admin"})),
+    ...feeds.map(f=>({id:f.id,date:f.date,type:"expense",cat:"Feed Purchase",desc:`${f.feedType} ${f.kg}kg — ${f.worker}`,amount:f.cost,src:"feed",worker:f.worker})),
+    ...expenses.map(e=>({...e,type:"expense",cat:e.category,src:"expense",desc:e.description||e.category,worker:e.worker||"Admin"}))
+  ].sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+
+  // Running balance (chronological)
+  let runBalance=capital.initial||0;
+  const txWithBalance=[...allTx].reverse().map(tx=>{
+    runBalance+=tx.type==="income"?tx.amount:-tx.amount;
+    return{...tx,runBal:runBalance};
+  }).reverse();
+
+  const filtered=txWithBalance.filter(tx=>{
+    if(filterType==="income"&&tx.type!=="income") return false;
+    if(filterType==="expense"&&tx.type!=="expense") return false;
+    if(search){
+      const q=search.toLowerCase();
+      if(!(tx.cat||"").toLowerCase().includes(q)&&!(tx.desc||"").toLowerCase().includes(q)&&!(tx.worker||"").toLowerCase().includes(q)) return false;
+    }
+    return true;
+  });
+
+  // Income by category
+  const incByCat={};
+  sales.forEach(s=>{incByCat["Pig Sale"]=(incByCat["Pig Sale"]||0)+(s.total||0);});
+  incomes.forEach(i=>{incByCat[i.category]=(incByCat[i.category]||0)+(i.amount||0);});
+  // Expense by category
+  const expByCat={};
+  feeds.forEach(f=>{expByCat["Feed Purchase"]=(expByCat["Feed Purchase"]||0)+(f.cost||0);});
+  expenses.forEach(e=>{expByCat[e.category]=(expByCat[e.category]||0)+(e.amount||0);});
 
   function addExpense(){
     if(!eForm.amount)return;
@@ -1278,102 +1535,189 @@ function Ledger({expenses,setExpenses,incomes,setIncomes,feeds,sales,capital,set
   function deleteExpense(id){setExpenses(p=>{const updated=p.filter(e=>e.id!==id);fsSet("expenses",updated);return updated;});}
   function saveEdit(){
     if(!editItem)return;
-    if(editItem.src==="income") setIncomes(p=>{const updated=p.map(i=>i.id===editItem.id?{...i,...editItem}:i);fsSet("incomes",updated);return updated;});
-    if(editItem.src==="expense") setExpenses(p=>{const updated=p.map(e=>e.id===editItem.id?{...e,...editItem}:e);fsSet("expenses",updated);return updated;});
+    if(editItem.src==="income") setIncomes(p=>{const updated=p.map(i=>i.id===editItem.id?{...i,...editItem,amount:parseFloat(editItem.amount)||i.amount}:i);fsSet("incomes",updated);return updated;});
+    if(editItem.src==="expense") setExpenses(p=>{const updated=p.map(e=>e.id===editItem.id?{...e,...editItem,amount:parseFloat(editItem.amount)||e.amount}:e);fsSet("expenses",updated);return updated;});
     setEditItem(null);
   }
+
   return(<div>
-    <div style={S.h1}>📒 Income & Expenses Ledger</div>
-    <div style={S.sub}>Full financial record — all buying & selling activities</div>
-    <div style={S.g4}>
-      {[{l:"Total Income",v:fmtRWF(totalIncome),c:"#10b981"},{l:"Total Expenses",v:fmtRWF(totalExpense),c:C.red},{l:"Net Profit",v:fmtRWF(profit),c:profit>=0?C.accent:C.red},{l:"Margin",v:totalIncome>0?((profit/totalIncome)*100).toFixed(1)+"%":"—",c:C.purple}].map(s=>(
-        <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
+    <div style={S.h1}>📒 Income & Expense Ledger</div>
+    <div style={S.sub}>Full financial record — all transactions, running balance & analytics</div>
+
+    {/* Summary stats */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:10,marginBottom:14}}>
+      {[
+        {l:"Total Income",v:fmtRWF(totalIncome),c:"#10b981"},
+        {l:"Total Expenses",v:fmtRWF(totalExpense),c:C.red},
+        {l:"Net Profit",v:fmtRWF(profit),c:profit>=0?C.accent:C.red},
+        {l:"Net Margin",v:margin+"%",c:parseFloat(margin)>=20?C.accent:parseFloat(margin)>=0?C.amber:C.red},
+      ].map(s=>(
+        <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c,fontSize:s.v.length>10?13:18}}>{s.v}</div></div>
       ))}
     </div>
-    <div style={{...S.card,padding:14,marginBottom:14}}>
-      <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:6}}><span style={{color:C.muted}}>Expenses vs Income</span><span style={{color:profit>=0?C.accent:C.red,fontWeight:700}}>{profit>=0?"✅ Profitable":"⚠️ Running at loss"}</span></div>
-      <div style={{height:10,background:C.elevated,borderRadius:10,overflow:"hidden"}}><div style={{height:"100%",width:(totalIncome>0?Math.min((totalExpense/totalIncome)*100,100):0)+"%",background:totalExpense>totalIncome?C.red:C.amber,borderRadius:10,transition:"width .4s"}}/></div>
-      <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:C.faint,marginTop:4}}><span>Expenses: {fmtRWF(totalExpense)}</span><span>Income: {fmtRWF(totalIncome)}</span></div>
+
+    {/* Visual profit bar */}
+    <div style={{...S.card,padding:"13px 16px",marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:6}}>
+        <span style={{color:C.muted,fontWeight:600}}>Expense Ratio</span>
+        <span style={{color:profit>=0?C.accent:C.red,fontWeight:700}}>{profit>=0?"✅ Profitable":"⚠️ Running at loss"}</span>
+      </div>
+      <div style={{height:12,background:C.elevated,borderRadius:8,overflow:"hidden",marginBottom:5}}>
+        <div style={{height:"100%",width:(totalIncome>0?Math.min((totalExpense/totalIncome)*100,100):0)+"%",background:totalExpense>totalIncome?"linear-gradient(90deg,#ef4444,#dc2626)":"linear-gradient(90deg,#f59e0b,#d97706)",borderRadius:8,transition:"width .4s"}}/>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:C.faint}}>
+        <span>Expenses: <b style={{color:C.red}}>{fmtRWF(totalExpense)}</b></span>
+        <span>Income: <b style={{color:"#10b981"}}>{fmtRWF(totalIncome)}</b></span>
+        <span>Profit: <b style={{color:profit>=0?C.accent:C.red}}>{fmtRWF(profit)}</b></span>
+      </div>
     </div>
-    <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border}}>
-      {[["overview","📊 Overview"],["income","💚 Add Income"],["expenses","🔴 Add Expense"],["all","All Transactions"]].map(([t,l])=>(
+
+    {/* Tabs */}
+    <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border,flexWrap:"wrap"}}>
+      {[["overview","📊 Overview"],["income","💚 Add Income"],["expenses","🔴 Add Expense"],["all","📋 All Transactions"]].map(([t,l])=>(
         <button key={t} style={S.tab(tab===t)} onClick={()=>setTab(t)}>{l}</button>
       ))}
     </div>
+
     {tab==="overview"&&(<div style={S.g2}>
       <div style={S.card}>
         <div style={{fontSize:13,fontWeight:700,color:"#10b981",marginBottom:12}}>💚 Income Sources</div>
-        <div style={S.row}><span style={{color:C.muted}}>🏷️ Pig Sales</span><span style={{color:"#10b981",fontWeight:700}}>{fmtRWF(totalSaleInc)}</span></div>
-        {Object.entries(incomes.reduce((a,i)=>{a[i.category]=(a[i.category]||0)+i.amount;return a;},{})).map(([cat,amt])=>(<div key={cat} style={S.row}><span style={{color:C.muted}}>{cat}</span><span style={{color:"#10b981",fontWeight:700}}>{fmtRWF(amt)}</span></div>))}
-        <div style={{...S.row,background:"rgba(16,185,129,.08)",border:"1px solid rgba(16,185,129,.25)",marginTop:6}}><span style={{fontWeight:700,color:C.text}}>TOTAL</span><span style={{color:"#10b981",fontWeight:800}}>{fmtRWF(totalIncome)}</span></div>
+        {Object.entries(incByCat).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>{
+          const pct=totalIncome>0?((amt/totalIncome)*100).toFixed(0):0;
+          return(<div key={cat} style={{marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:3}}>
+              <span style={{color:C.muted}}>{cat}</span>
+              <span style={{color:"#10b981",fontWeight:700}}>{fmtRWF(amt)} <span style={{color:C.faint,fontWeight:400}}>({pct}%)</span></span>
+            </div>
+            <div style={{height:5,background:C.elevated,borderRadius:3,overflow:"hidden"}}>
+              <div style={{height:"100%",width:pct+"%",background:"#10b981",borderRadius:3}}/>
+            </div>
+          </div>);
+        })}
+        {Object.keys(incByCat).length===0&&<div style={{color:C.faint,fontSize:13}}>No income yet.</div>}
+        <div style={{...S.row,background:"rgba(16,185,129,.08)",border:"1px solid rgba(16,185,129,.2)",borderRadius:7,marginTop:8}}>
+          <span style={{fontWeight:700,color:C.text}}>TOTAL</span>
+          <span style={{color:"#10b981",fontWeight:800}}>{fmtRWF(totalIncome)}</span>
+        </div>
       </div>
       <div style={S.card}>
         <div style={{fontSize:13,fontWeight:700,color:C.red,marginBottom:12}}>🔴 Expense Categories</div>
-        <div style={S.row}><span style={{color:C.muted}}>🌾 Feed Costs</span><span style={{color:C.red,fontWeight:700}}>{fmtRWF(totalFeedCost)}</span></div>
-        {Object.entries(expenses.reduce((a,e)=>{a[e.category]=(a[e.category]||0)+e.amount;return a;},{})).map(([cat,amt])=>(<div key={cat} style={S.row}><span style={{color:C.muted}}>{cat}</span><span style={{color:C.red,fontWeight:700}}>{fmtRWF(amt)}</span></div>))}
-        <div style={{...S.row,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.25)",marginTop:6}}><span style={{fontWeight:700,color:C.text}}>TOTAL</span><span style={{color:C.red,fontWeight:800}}>{fmtRWF(totalExpense)}</span></div>
-      </div>
-    </div>)}
-    {tab==="income"&&(<div style={S.card}>
-      <div style={{fontSize:14,fontWeight:700,color:"#10b981",marginBottom:14}}>💚 Record Income</div>
-      {iSaved&&<div style={{padding:10,background:"rgba(16,185,129,.08)",borderRadius:8,marginBottom:12,color:"#10b981",fontSize:13}}>✓ Income recorded!</div>}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
-        <div><label style={S.lbl}>Date</label><input type="date" value={iForm.date} onChange={e=>setIForm({...iForm,date:e.target.value})} style={S.inp}/></div>
-        <div><label style={S.lbl}>Category</label><select value={iForm.category} onChange={e=>setIForm({...iForm,category:e.target.value})} style={S.inp}>{INCOME_CATS.map(c=><option key={c}>{c}</option>)}</select></div>
-        <div><label style={S.lbl}>Amount (RWF)</label><input type="number" placeholder="50000" value={iForm.amount} onChange={e=>setIForm({...iForm,amount:e.target.value})} style={S.inp}/></div>
-        <div><label style={S.lbl}>Description</label><input placeholder="e.g. Sold 2 finisher pigs" value={iForm.description} onChange={e=>setIForm({...iForm,description:e.target.value})} style={S.inp}/></div>
-      </div>
-      <button style={{...S.btn("#166534"),width:"100%",padding:12,fontSize:14}} onClick={addIncome}>💚 Record Income →</button>
-    </div>)}
-    {tab==="expenses"&&(<div style={S.card}>
-      <div style={{fontSize:14,fontWeight:700,color:C.red,marginBottom:14}}>🔴 Record Expense</div>
-      {eSaved&&<div style={{padding:10,background:"rgba(239,68,68,.08)",borderRadius:8,marginBottom:12,color:C.red,fontSize:13}}>✓ Expense recorded!</div>}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
-        <div><label style={S.lbl}>Date</label><input type="date" value={eForm.date} onChange={e=>setEForm({...eForm,date:e.target.value})} style={S.inp}/></div>
-        <div><label style={S.lbl}>Category</label><select value={eForm.category} onChange={e=>setEForm({...eForm,category:e.target.value})} style={S.inp}>{EXPENSE_CATS.map(c=><option key={c}>{c}</option>)}</select></div>
-        <div><label style={S.lbl}>Amount (RWF)</label><input type="number" placeholder="15000" value={eForm.amount} onChange={e=>setEForm({...eForm,amount:e.target.value})} style={S.inp}/></div>
-        <div><label style={S.lbl}>Description</label><input placeholder="e.g. Bought 3 piglets at Kimironko" value={eForm.description} onChange={e=>setEForm({...eForm,description:e.target.value})} style={S.inp}/></div>
-      </div>
-      <button style={{...S.btn(C.red),width:"100%",padding:12,fontSize:14}} onClick={addExpense}>🔴 Record Expense →</button>
-    </div>)}
-    {tab==="all"&&(<div style={S.card}>
-      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>All Transactions ({allTx.length})</div>
-      {allTx.length===0&&<div style={{color:C.faint,fontSize:13}}>No transactions yet.</div>}
-      {allTx.map((tx,i)=>(
-        <div key={i} style={{...S.row,flexWrap:"wrap",gap:4,borderBottom:"1px solid "+C.elevated,paddingBottom:8,marginBottom:8}}>
-          {editItem&&editItem.id===tx.id?(
-            <div style={{width:"100%"}}>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-                <div><label style={S.lbl}>Amount (RWF)</label><input type="number" value={editItem.amount} onChange={e=>setEditItem({...editItem,amount:parseFloat(e.target.value)||0})} style={S.inp}/></div>
-                <div><label style={S.lbl}>Date</label><input type="date" value={editItem.date} onChange={e=>setEditItem({...editItem,date:e.target.value})} style={S.inp}/></div>
-                <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Description</label><input value={editItem.desc||editItem.description||""} onChange={e=>setEditItem({...editItem,desc:e.target.value,description:e.target.value})} style={S.inp}/></div>
-              </div>
-              <div style={{display:"flex",gap:8}}>
-                <button onClick={saveEdit} style={{...S.btn(C.accent),flex:1,padding:"7px",fontSize:12}}>✓ Save</button>
-                <button onClick={()=>setEditItem(null)} style={{...S.btn("#374151"),flex:1,padding:"7px",fontSize:12}}>Cancel</button>
-              </div>
+        {Object.entries(expByCat).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>{
+          const pct=totalExpense>0?((amt/totalExpense)*100).toFixed(0):0;
+          return(<div key={cat} style={{marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:3}}>
+              <span style={{color:C.muted}}>{cat}</span>
+              <span style={{color:C.red,fontWeight:700}}>{fmtRWF(amt)} <span style={{color:C.faint,fontWeight:400}}>({pct}%)</span></span>
             </div>
-          ):(
-            <>
-              <div style={{flex:1}}>
-                <div style={{display:"flex",alignItems:"center",gap:7}}>
-                  <span style={{fontSize:11,padding:"2px 7px",borderRadius:12,background:tx.type==="income"?"rgba(16,185,129,.12)":"rgba(239,68,68,.12)",color:tx.type==="income"?"#10b981":C.red,fontWeight:700}}>{tx.type==="income"?"↑ IN":"↓ OUT"}</span>
-                  <span style={{color:C.text,fontWeight:600}}>{tx.cat}</span>
-                </div>
-                {(tx.desc||tx.description)&&<div style={{fontSize:11,color:C.faint,marginTop:2,paddingLeft:38}}>{tx.desc||tx.description}</div>}
-              </div>
-              <div style={{textAlign:"right"}}>
-                <div style={{fontWeight:700,color:tx.type==="income"?"#10b981":C.red}}>{fmtRWF(tx.amount)}</div>
-                <div style={{fontSize:11,color:C.faint}}>{tx.date}</div>
-                {(tx.src==="income"||tx.src==="expense")&&<div style={{display:"flex",gap:5,marginTop:4,justifyContent:"flex-end"}}>
-                  <button onClick={()=>setEditItem({...tx})} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid "+C.border,background:"transparent",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>✏️</button>
-                  <button onClick={()=>{if(window.confirm("Delete this record?"))tx.src==="income"?deleteIncome(tx.id):deleteExpense(tx.id);}} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>
-                </div>}
-              </div>
-            </>
-          )}
+            <div style={{height:5,background:C.elevated,borderRadius:3,overflow:"hidden"}}>
+              <div style={{height:"100%",width:pct+"%",background:C.red,borderRadius:3}}/>
+            </div>
+          </div>);
+        })}
+        {Object.keys(expByCat).length===0&&<div style={{color:C.faint,fontSize:13}}>No expenses yet.</div>}
+        <div style={{...S.row,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",borderRadius:7,marginTop:8}}>
+          <span style={{fontWeight:700,color:C.text}}>TOTAL</span>
+          <span style={{color:C.red,fontWeight:800}}>{fmtRWF(totalExpense)}</span>
         </div>
-      ))}
+      </div>
+    </div>)}
+
+    {tab==="income"&&(<div style={{maxWidth:500}}>
+      <div style={S.card}>
+        <div style={{fontSize:14,fontWeight:700,color:"#10b981",marginBottom:14}}>💚 Record Manual Income</div>
+        {iSaved&&<div style={{padding:10,background:"rgba(16,185,129,.08)",borderRadius:8,marginBottom:12,color:"#10b981",fontSize:13,fontWeight:600}}>✅ Income recorded!</div>}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+          <div><label style={S.lbl}>Date</label><input type="date" value={iForm.date} onChange={e=>setIForm({...iForm,date:e.target.value})} style={S.inp}/></div>
+          <div><label style={S.lbl}>Category</label><select value={iForm.category} onChange={e=>setIForm({...iForm,category:e.target.value})} style={S.inp}>{INCOME_CATS.map(c=><option key={c}>{c}</option>)}</select></div>
+          <div><label style={S.lbl}>Amount (RWF) *</label><input type="number" placeholder="e.g. 50000" value={iForm.amount} onChange={e=>setIForm({...iForm,amount:e.target.value})} style={S.inp}/></div>
+          <div><label style={S.lbl}>Description</label><input placeholder="e.g. Manure sale" value={iForm.description} onChange={e=>setIForm({...iForm,description:e.target.value})} style={S.inp}/></div>
+        </div>
+        {iForm.amount&&parseFloat(iForm.amount)>0&&<div style={{padding:"9px 13px",background:"rgba(16,185,129,.06)",border:"1px solid rgba(16,185,129,.2)",borderRadius:8,marginBottom:12,fontSize:13,color:"#10b981",fontWeight:600}}>
+          Capital will increase by {fmtRWF(parseFloat(iForm.amount))}
+        </div>}
+        <button disabled={!iForm.amount||parseFloat(iForm.amount)<=0} style={{...S.btn("#166534"),width:"100%",padding:12,fontSize:14,opacity:!iForm.amount?0.5:1}} onClick={addIncome}>💚 Record Income →</button>
+      </div>
+    </div>)}
+
+    {tab==="expenses"&&(<div style={{maxWidth:500}}>
+      <div style={S.card}>
+        <div style={{fontSize:14,fontWeight:700,color:C.red,marginBottom:14}}>🔴 Record Manual Expense</div>
+        {eSaved&&<div style={{padding:10,background:"rgba(239,68,68,.08)",borderRadius:8,marginBottom:12,color:C.red,fontSize:13,fontWeight:600}}>✅ Expense recorded!</div>}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+          <div><label style={S.lbl}>Date</label><input type="date" value={eForm.date} onChange={e=>setEForm({...eForm,date:e.target.value})} style={S.inp}/></div>
+          <div><label style={S.lbl}>Category</label><select value={eForm.category} onChange={e=>setEForm({...eForm,category:e.target.value})} style={S.inp}>{EXPENSE_CATS.map(c=><option key={c}>{c}</option>)}</select></div>
+          <div><label style={S.lbl}>Amount (RWF) *</label><input type="number" placeholder="e.g. 15000" value={eForm.amount} onChange={e=>setEForm({...eForm,amount:e.target.value})} style={S.inp}/></div>
+          <div><label style={S.lbl}>Description</label><input placeholder="e.g. 3 bags Maize bran" value={eForm.description} onChange={e=>setEForm({...eForm,description:e.target.value})} style={S.inp}/></div>
+        </div>
+        {eForm.amount&&parseFloat(eForm.amount)>0&&<div style={{padding:"9px 13px",background:"rgba(239,68,68,.06)",border:"1px solid rgba(239,68,68,.2)",borderRadius:8,marginBottom:12,fontSize:13,color:C.red,fontWeight:600}}>
+          Capital will decrease by {fmtRWF(parseFloat(eForm.amount))}
+        </div>}
+        <button disabled={!eForm.amount||parseFloat(eForm.amount)<=0} style={{...S.btn(C.red),width:"100%",padding:12,fontSize:14,opacity:!eForm.amount?0.5:1}} onClick={addExpense}>🔴 Record Expense →</button>
+      </div>
+    </div>)}
+
+    {tab==="all"&&(<div>
+      {/* Search & filter bar */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:10,marginBottom:12}}>
+        <input placeholder="🔍 Search by category, description, worker…" value={search} onChange={e=>setSearch(e.target.value)} style={S.inp}/>
+        <select value={filterType} onChange={e=>setFilterType(e.target.value)} style={{...S.inp,width:"auto"}}>
+          <option value="all">All Types</option>
+          <option value="income">Income Only</option>
+          <option value="expense">Expenses Only</option>
+        </select>
+      </div>
+      {/* Summary for filtered set */}
+      {(search||filterType!=="all")&&<div style={{...S.card,padding:"10px 14px",marginBottom:12,background:"rgba(22,163,74,.04)"}}>
+        <div style={{fontSize:12,color:C.muted}}>Showing {filtered.length} of {allTx.length} transactions
+          {filterType==="income"&&<span style={{color:"#10b981",fontWeight:700,marginLeft:8}}>Total: {fmtRWF(filtered.reduce((s,t)=>s+(t.amount||0),0))}</span>}
+          {filterType==="expense"&&<span style={{color:C.red,fontWeight:700,marginLeft:8}}>Total: {fmtRWF(filtered.reduce((s,t)=>s+(t.amount||0),0))}</span>}
+        </div>
+      </div>}
+      <div style={S.card}>
+        <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>All Transactions ({allTx.length})</div>
+        {filtered.length===0&&<div style={{color:C.faint,fontSize:13,textAlign:"center",padding:20}}>{search?"No results for your search.":"No transactions yet."}</div>}
+        {filtered.map((tx,i)=>(
+          <div key={i} style={{borderBottom:"1px solid "+C.elevated,paddingBottom:8,marginBottom:8}}>
+            {editItem&&editItem.id===tx.id?(
+              <div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                  <div><label style={S.lbl}>Amount (RWF)</label><input type="number" value={editItem.amount} onChange={e=>setEditItem({...editItem,amount:e.target.value})} style={S.inp}/></div>
+                  <div><label style={S.lbl}>Date</label><input type="date" value={editItem.date} onChange={e=>setEditItem({...editItem,date:e.target.value})} style={S.inp}/></div>
+                  <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Description</label><input value={editItem.desc||editItem.description||""} onChange={e=>setEditItem({...editItem,desc:e.target.value,description:e.target.value})} style={S.inp}/></div>
+                </div>
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={saveEdit} style={{...S.btn(C.accent),flex:1,padding:"7px",fontSize:12}}>✓ Save</button>
+                  <button onClick={()=>setEditItem(null)} style={{...S.btn("#374151"),flex:1,padding:"7px",fontSize:12}}>Cancel</button>
+                </div>
+              </div>
+            ):(
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:2}}>
+                    <span style={{fontSize:11,padding:"2px 7px",borderRadius:12,background:tx.type==="income"?"rgba(16,185,129,.12)":"rgba(239,68,68,.12)",color:tx.type==="income"?"#10b981":C.red,fontWeight:700}}>{tx.type==="income"?"↑ IN":"↓ OUT"}</span>
+                    <span style={{color:C.text,fontWeight:600,fontSize:12}}>{tx.cat}</span>
+                    {tx.worker&&<span style={{fontSize:10,color:C.faint}}>· {tx.worker}</span>}
+                  </div>
+                  {(tx.desc||tx.description)&&<div style={{fontSize:11,color:C.faint,paddingLeft:38}}>{tx.desc||tx.description}</div>}
+                  <div style={{fontSize:10,color:C.faint,paddingLeft:38,marginTop:1}}>{tx.date}</div>
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontWeight:700,color:tx.type==="income"?"#10b981":C.red,fontSize:14}}>{tx.type==="income"?"+":"-"}{fmtRWF(tx.amount)}</div>
+                  <div style={{fontSize:10,color:C.faint,marginTop:1}}>Bal: {fmtRWF(tx.runBal)}</div>
+                  {(tx.src==="income"||tx.src==="expense")&&<div style={{display:"flex",gap:4,marginTop:4,justifyContent:"flex-end"}}>
+                    <button onClick={()=>setEditItem({...tx})} style={{fontSize:10,padding:"2px 7px",borderRadius:5,border:"1px solid "+C.border,background:"transparent",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>✏️</button>
+                    <button onClick={()=>{if(window.confirm("Delete this record?"))tx.src==="income"?deleteIncome(tx.id):deleteExpense(tx.id);}} style={{fontSize:10,padding:"2px 7px",borderRadius:5,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>
+                  </div>}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+        {allTx.length>0&&<div style={{padding:"9px 13px",background:profit>=0?"rgba(22,163,74,.06)":"rgba(239,68,68,.06)",borderRadius:8,display:"flex",justifyContent:"space-between",marginTop:4}}>
+          <span style={{color:C.muted,fontSize:12}}>{allTx.length} transactions total</span>
+          <span style={{fontWeight:700,color:profit>=0?C.accent:C.red,fontSize:13}}>Net: {fmtRWF(profit)}</span>
+        </div>}
+      </div>
     </div>)}
   </div>);
 }
@@ -2844,17 +3188,42 @@ function CapitalManager({capital,setCapital,feeds,sales,expenses,incomes,pigs,us
 
     {/* Overview */}
     {tab==="overview"&&(<div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:12,marginBottom:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:12,marginBottom:16}}>
         <KPI icon="💵" label="Net Capital" value={fmtRWF(balance)} color={balance>=0?C.accent:C.red}/>
-        <KPI icon="📥" label="All Income" value={fmtRWF((capital.initial||0)+incomeTotal)} color="#10b981"/>
-        <KPI icon="📤" label="All Expenses" value={fmtRWF(expenseTotal)} color={C.red}/>
+        <KPI icon="📥" label="Total Income" value={fmtRWF(incomeTotal)} color="#10b981"/>
+        <KPI icon="📤" label="Total Expenses" value={fmtRWF(expenseTotal)} color={C.red}/>
         <KPI icon="🔢" label="Transactions" value={txs.length} color={C.blue}/>
+        <KPI icon="💰" label="Initial Capital" value={fmtRWF(capital.initial||0)} color={C.purple}/>
+        <KPI icon="📊" label="Net Margin" value={incomeTotal>0?((balance-capital.initial||0)/incomeTotal*100).toFixed(0)+"%":"—"} color={C.amber}/>
       </div>
+      {/* Capital flow bar */}
+      {(incomeTotal>0||expenseTotal>0)&&<div style={{...S.card,padding:"13px 16px",marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:8}}>
+          <span style={{fontWeight:700,color:C.text}}>Capital Flow</span>
+          <span style={{color:balance>=0?C.accent:C.red,fontWeight:700}}>{balance>=0?"Positive":"Negative"} balance</span>
+        </div>
+        <div style={{marginBottom:8}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:"#10b981",marginBottom:3}}>
+            <span>Income</span><span>{fmtRWF(incomeTotal)}</span>
+          </div>
+          <div style={{height:8,background:C.elevated,borderRadius:4,overflow:"hidden"}}>
+            <div style={{height:"100%",width:Math.min((incomeTotal/Math.max(incomeTotal,expenseTotal))*100,100)+"%",background:"linear-gradient(90deg,#10b981,#059669)",borderRadius:4}}/>
+          </div>
+        </div>
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.red,marginBottom:3}}>
+            <span>Expenses</span><span>{fmtRWF(expenseTotal)}</span>
+          </div>
+          <div style={{height:8,background:C.elevated,borderRadius:4,overflow:"hidden"}}>
+            <div style={{height:"100%",width:Math.min((expenseTotal/Math.max(incomeTotal,expenseTotal))*100,100)+"%",background:"linear-gradient(90deg,#ef4444,#dc2626)",borderRadius:4}}/>
+          </div>
+        </div>
+      </div>}
       <div style={S.card}>
         <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>📋 Recent Transactions</div>
         {txs.length===0&&<div style={{color:C.faint,fontSize:13}}>No transactions yet. Add one to get started.</div>}
         {txs.slice().reverse().slice(0,8).map((tx,i)=>(
-          <div key={i} style={{...S.row,flexWrap:"wrap",gap:4}}>
+          <div key={i} style={{...S.row,flexWrap:"wrap",gap:4,borderBottom:"1px solid "+C.elevated,paddingBottom:6,marginBottom:6}}>
             <div style={{flex:1}}>
               <div style={{display:"flex",alignItems:"center",gap:7}}>
                 <span style={{fontSize:11,padding:"2px 7px",borderRadius:12,background:tx.type==="income"?"rgba(16,185,129,.12)":"rgba(239,68,68,.12)",color:tx.type==="income"?"#10b981":C.red,fontWeight:700}}>{tx.type==="income"?"↑ IN":"↓ OUT"}</span>
@@ -2863,7 +3232,7 @@ function CapitalManager({capital,setCapital,feeds,sales,expenses,incomes,pigs,us
               {tx.description&&<div style={{fontSize:11,color:C.faint,marginTop:2,paddingLeft:38}}>{tx.description}</div>}
             </div>
             <div style={{textAlign:"right"}}>
-              <div style={{fontWeight:700,color:tx.type==="income"?"#10b981":C.red}}>{fmtRWF(tx.amount)}</div>
+              <div style={{fontWeight:700,color:tx.type==="income"?"#10b981":C.red,fontSize:13}}>{tx.type==="income"?"+":"-"}{fmtRWF(tx.amount)}</div>
               <div style={{fontSize:10,color:C.faint}}>{tx.date}</div>
             </div>
           </div>
@@ -2955,10 +3324,20 @@ function CapitalManager({capital,setCapital,feeds,sales,expenses,incomes,pigs,us
     </div>)}
 
     {/* History */}
-    {tab==="history"&&(<div style={S.card}>
-      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>📋 All Transactions ({txs.length})</div>
-      {txs.length===0&&<div style={{color:C.faint,fontSize:13}}>No transactions recorded yet.</div>}
-      {txs.slice().reverse().map((tx,i)=>(
+    {tab==="history"&&(<div>
+      <div style={{background:"linear-gradient(135deg,#0f2318,#1a3d26)",borderRadius:12,padding:"14px 18px",marginBottom:12}}>
+        <div style={{fontSize:10,color:"rgba(74,222,128,.6)",fontWeight:600,textTransform:"uppercase",letterSpacing:1,marginBottom:3}}>Current Balance</div>
+        <div style={{fontSize:24,fontWeight:800,color:balance>=0?"#4ade80":"#f87171"}}>{fmtRWF(balance)}</div>
+        <div style={{display:"flex",gap:14,marginTop:5,flexWrap:"wrap"}}>
+          <span style={{fontSize:11,color:"rgba(74,222,128,.6)"}}>↑ In: <b style={{color:"#4ade80"}}>{fmtRWF(incomeTotal)}</b></span>
+          <span style={{fontSize:11,color:"rgba(248,113,113,.6)"}}>↓ Out: <b style={{color:"#f87171"}}>{fmtRWF(expenseTotal)}</b></span>
+          <span style={{fontSize:11,color:"rgba(255,255,255,.35)"}}>📋 {txs.length} tx</span>
+        </div>
+      </div>
+      <div style={S.card}>
+        <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>📋 All Transactions ({txs.length})</div>
+        {txs.length===0&&<div style={{color:C.faint,fontSize:13}}>No transactions recorded yet.</div>}
+        {txs.slice().reverse().map((tx,i)=>(
         <div key={i} style={{...S.card,marginBottom:8,padding:"10px 13px",border:"1px solid "+(tx.type==="income"?"rgba(16,185,129,.15)":"rgba(239,68,68,.15)")}}>
           {editId===tx.id?(
             <div>
@@ -2988,7 +3367,7 @@ function CapitalManager({capital,setCapital,feeds,sales,expenses,incomes,pigs,us
                 <div style={{fontSize:10,color:C.faint,paddingLeft:38,marginTop:2}}>{tx.date}</div>
               </div>
               <div style={{textAlign:"right",flexShrink:0}}>
-                <div style={{fontWeight:700,color:tx.type==="income"?"#10b981":C.red,fontSize:14}}>{fmtRWF(tx.amount)}</div>
+                <div style={{fontWeight:700,color:tx.type==="income"?"#10b981":C.red,fontSize:14}}>{tx.type==="income"?"+":"-"}{fmtRWF(tx.amount)}</div>
                 <div style={{display:"flex",gap:5,marginTop:5,justifyContent:"flex-end"}}>
                   <button onClick={()=>{setEditId(tx.id);setEditForm({type:tx.type,category:tx.category,amount:String(tx.amount),description:tx.description||"",date:tx.date});}} style={{fontSize:10,padding:"3px 9px",borderRadius:6,border:"1px solid "+C.border,background:"transparent",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>✏️ Edit</button>
                   <button onClick={()=>{if(window.confirm("Delete this transaction?"))deleteTx(tx.id);}} style={{fontSize:10,padding:"3px 9px",borderRadius:6,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>
@@ -2997,7 +3376,8 @@ function CapitalManager({capital,setCapital,feeds,sales,expenses,incomes,pigs,us
             </div>
           )}
         </div>
-      ))}
+        ))}
+      </div>
     </div>)}
   </div>);
 }
@@ -3502,53 +3882,150 @@ function AHome({pigs,feeds,sales,logs,users,expenses,incomes,reproductions,stock
 function Fin({feeds,sales,pigs,logs,expenses,incomes,allData,capital}){
   // Use calcPnL for consistent totals across all screens
   const {totalInc:totalIncome,totalExp:totalExpense,profit}=calcPnL(capital||{transactions:[]},feeds,sales,expenses,incomes);
-  // Keep array-based breakdowns for the detail cards (feed vs other, sales vs other)
   const totalSaleInc=sales.reduce((s,l)=>s+(l.total||0),0);
   const totalOtherInc=incomes.reduce((s,l)=>s+(l.amount||0),0);
   const totalFeedCost=feeds.reduce((s,l)=>s+(l.cost||0),0);
   const totalOtherExp=expenses.reduce((s,l)=>s+(l.amount||0),0);
   const roi=totalExpense>0?((profit/totalExpense)*100).toFixed(1):"—";
+  const netMargin=totalIncome>0?((profit/totalIncome)*100).toFixed(1):"—";
+  const grossMargin=totalIncome>0?(((totalIncome-totalFeedCost)/totalIncome)*100).toFixed(1):"—";
+  const feedRatio=totalExpense>0?((totalFeedCost/totalExpense)*100).toFixed(1):"—";
+
+  // Monthly data
   const months={};
   [...sales.map(s=>({date:s.date,rev:s.total,cost:0})),...incomes.map(i=>({date:i.date,rev:i.amount,cost:0})),...feeds.map(f=>({date:f.date,rev:0,cost:f.cost})),...expenses.map(e=>({date:e.date,rev:0,cost:e.amount}))].forEach(l=>{const m=l.date&&l.date.slice(0,7);if(!m)return;if(!months[m])months[m]={rev:0,cost:0};months[m].rev+=l.rev;months[m].cost+=l.cost;});
+  const sortedMonths=Object.entries(months).sort((a,b)=>b[0].localeCompare(a[0]));
+  const maxMonthVal=Math.max(...sortedMonths.map(([,v])=>Math.max(v.rev,v.cost)),1);
+
+  // Expense by category
+  const expByCat={};
+  feeds.forEach(f=>{expByCat["Feed Purchase"]=(expByCat["Feed Purchase"]||0)+(f.cost||0);});
+  expenses.forEach(e=>{expByCat[e.category]=(expByCat[e.category]||0)+(e.amount||0);});
+  const sortedExpCats=Object.entries(expByCat).sort((a,b)=>b[1]-a[1]).slice(0,6);
+
+  // Active herd value
+  const active=pigs.filter(p=>p.status==="active");
+  const herdValue=active.reduce((s,pig)=>s+getMarketPrice(pig.stage,pig.weight),0);
+
   return(<div>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-      <div style={S.h1}>Financial Dashboard</div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+      <div style={S.h1}>💰 Financial Dashboard</div>
       <PDFBtn label="Finance PDF" type="finance" getData={()=>allData} icon="💰" color="#374151"/>
     </div>
-    <div style={S.g4}>
-      {[{l:"Total Income",v:fmtRWF(totalIncome),c:"#10b981"},{l:"Total Expenses",v:fmtRWF(totalExpense),c:C.red},{l:"Net Profit",v:fmtRWF(profit),c:profit>=0?C.accent:C.red},{l:"ROI",v:roi==="—"?"—":roi+"%",c:C.purple}].map(s=>(
-        <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c,fontSize:18}}>{s.v}</div></div>
+
+    {/* Key financial KPIs */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:10,marginBottom:14}}>
+      {[
+        {l:"Total Income",v:fmtRWF(totalIncome),c:"#10b981"},
+        {l:"Total Expenses",v:fmtRWF(totalExpense),c:C.red},
+        {l:"Net Profit",v:fmtRWF(profit),c:profit>=0?C.accent:C.red},
+        {l:"ROI",v:roi==="—"?"—":roi+"%",c:C.purple},
+        {l:"Net Margin",v:netMargin==="—"?"—":netMargin+"%",c:parseFloat(netMargin)>=20?C.accent:parseFloat(netMargin)>=0?C.amber:C.red},
+        {l:"Gross Margin",v:grossMargin==="—"?"—":grossMargin+"%",c:C.blue},
+        {l:"Feed % of Exp",v:feedRatio==="—"?"—":feedRatio+"%",c:C.amber},
+        {l:"Herd Value",v:fmtRWF(herdValue),c:C.purple},
+      ].map(s=>(
+        <div key={s.l} style={{...S.stat,padding:"11px 13px"}}>
+          <div style={S.sl}>{s.l}</div>
+          <div style={{...S.sv,color:s.c,fontSize:s.v.length>9?13:18}}>{s.v}</div>
+        </div>
       ))}
     </div>
+
+    {/* Profitability status bar */}
+    <div style={{...S.card,padding:"13px 16px",marginBottom:14,background:profit>=0?"rgba(22,163,74,.04)":"rgba(239,68,68,.04)",border:"1px solid "+(profit>=0?"rgba(22,163,74,.2)":"rgba(239,68,68,.2)")}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+        <span style={{fontSize:13,fontWeight:700,color:profit>=0?C.accent:C.red}}>{profit>=0?"✅ Farm is Profitable":"⚠️ Running at a Loss"}</span>
+        <span style={{fontSize:12,color:C.faint}}>Expense ratio: {totalIncome>0?((totalExpense/totalIncome)*100).toFixed(1):0}%</span>
+      </div>
+      <div style={{height:12,background:C.elevated,borderRadius:8,overflow:"hidden",marginBottom:5}}>
+        <div style={{height:"100%",width:(totalIncome>0?Math.min((totalExpense/totalIncome)*100,100):0)+"%",background:totalExpense>totalIncome?"linear-gradient(90deg,#ef4444,#dc2626)":"linear-gradient(90deg,#f59e0b,#16a34a)",borderRadius:8,transition:"width .5s"}}/>
+      </div>
+      <div style={{display:"flex",gap:14,flexWrap:"wrap",fontSize:11,color:C.faint}}>
+        <span>📥 Income: <b style={{color:"#10b981"}}>{fmtRWF(totalIncome)}</b></span>
+        <span>📤 Expenses: <b style={{color:C.red}}>{fmtRWF(totalExpense)}</b></span>
+        <span>💹 Net: <b style={{color:profit>=0?C.accent:C.red}}>{fmtRWF(profit)}</b></span>
+        <span>📦 Herd: <b style={{color:C.purple}}>{fmtRWF(herdValue)}</b></span>
+      </div>
+    </div>
+
+    {/* Income + Expense side-by-side breakdown */}
     <div style={S.g2}>
       <div style={S.card}>
-        <div style={{fontSize:13,fontWeight:700,color:"#10b981",marginBottom:10}}>💚 Income Breakdown</div>
-        <div style={S.row}><span style={{color:C.muted}}>🏷️ Pig Sales</span><span style={{color:"#10b981",fontWeight:700}}>{fmtRWF(totalSaleInc)}</span></div>
-        <div style={S.row}><span style={{color:C.muted}}>💰 Other Income</span><span style={{color:"#10b981",fontWeight:700}}>{fmtRWF(totalOtherInc)}</span></div>
+        <div style={{fontSize:13,fontWeight:700,color:"#10b981",marginBottom:12}}>💚 Income Breakdown</div>
+        {[["🏷️ Pig Sales",totalSaleInc,totalIncome],["💰 Other Income",totalOtherInc,totalIncome]].map(([l,amt,tot])=>{
+          const pct=tot>0?((amt/tot)*100).toFixed(0):0;
+          return(<div key={l} style={{marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:3}}>
+              <span style={{color:C.muted}}>{l}</span>
+              <span style={{color:"#10b981",fontWeight:700}}>{fmtRWF(amt)}</span>
+            </div>
+            <div style={{height:6,background:C.elevated,borderRadius:3,overflow:"hidden"}}>
+              <div style={{height:"100%",width:pct+"%",background:"#10b981",borderRadius:3}}/>
+            </div>
+          </div>);
+        })}
+        <div style={{marginTop:8,...S.row,background:"rgba(16,185,129,.07)",borderRadius:7}}>
+          <span style={{fontWeight:700,fontSize:12}}>TOTAL</span>
+          <span style={{color:"#10b981",fontWeight:800}}>{fmtRWF(totalIncome)}</span>
+        </div>
       </div>
       <div style={S.card}>
-        <div style={{fontSize:13,fontWeight:700,color:C.red,marginBottom:10}}>🔴 Expense Breakdown</div>
-        <div style={S.row}><span style={{color:C.muted}}>🌾 Feed Costs</span><span style={{color:C.red,fontWeight:700}}>{fmtRWF(totalFeedCost)}</span></div>
-        <div style={S.row}><span style={{color:C.muted}}>📦 Other Expenses</span><span style={{color:C.red,fontWeight:700}}>{fmtRWF(totalOtherExp)}</span></div>
+        <div style={{fontSize:13,fontWeight:700,color:C.red,marginBottom:12}}>🔴 Expense Breakdown</div>
+        {sortedExpCats.map(([cat,amt])=>{
+          const pct=totalExpense>0?((amt/totalExpense)*100).toFixed(0):0;
+          return(<div key={cat} style={{marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:3}}>
+              <span style={{color:C.muted}}>{cat}</span>
+              <span style={{color:C.red,fontWeight:700}}>{fmtRWF(amt)} <span style={{color:C.faint,fontWeight:400,fontSize:10}}>({pct}%)</span></span>
+            </div>
+            <div style={{height:6,background:C.elevated,borderRadius:3,overflow:"hidden"}}>
+              <div style={{height:"100%",width:pct+"%",background:cat==="Feed Purchase"?"#f59e0b":C.red,borderRadius:3}}/>
+            </div>
+          </div>);
+        })}
+        <div style={{marginTop:8,...S.row,background:"rgba(239,68,68,.07)",borderRadius:7}}>
+          <span style={{fontWeight:700,fontSize:12}}>TOTAL</span>
+          <span style={{color:C.red,fontWeight:800}}>{fmtRWF(totalExpense)}</span>
+        </div>
       </div>
     </div>
-    <div style={S.card}>
-      <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:10}}>Monthly Summary</div>
-      {Object.keys(months).length===0?<div style={{color:C.faint,fontSize:13}}>No data yet.</div>:
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-          <thead><tr>{["Month","Income","Expenses","Profit"].map(h=><th key={h} style={{textAlign:"left",color:C.faint,paddingBottom:8,borderBottom:"1px solid "+C.border,fontSize:11}}>{h}</th>)}</tr></thead>
-          <tbody>{Object.entries(months).sort((a,b)=>b[0].localeCompare(a[0])).map(([m,v])=>(
-            <tr key={m} style={{borderBottom:"1px solid "+C.elevated}}>
-              <td style={{padding:"7px 0",color:C.muted}}>{m}</td>
-              <td style={{color:"#10b981"}}>{fmtRWF(v.rev)}</td>
-              <td style={{color:C.red}}>{fmtRWF(v.cost)}</td>
-              <td style={{color:v.rev-v.cost>=0?C.accent:C.red,fontWeight:700}}>{fmtRWF(v.rev-v.cost)}</td>
-            </tr>
-          ))}</tbody>
-        </table>}
+
+    {/* Monthly summary with inline bars */}
+    <div style={{...S.card,marginTop:14}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:14}}>📅 Monthly Income vs Expenses</div>
+      {sortedMonths.length===0?<div style={{color:C.faint,fontSize:13}}>No data yet.</div>:
+        sortedMonths.slice(0,8).map(([m,v])=>{
+          const p=v.rev-v.cost;
+          const label=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(m.split("-")[1])-1]+" "+m.split("-")[0].slice(2);
+          return(<div key={m} style={{marginBottom:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:4}}>
+              <span style={{fontWeight:600,color:C.text,fontSize:12}}>{label}</span>
+              <span style={{fontWeight:700,color:p>=0?C.accent:C.red}}>{p>=0?"+":""}{fmtRWF(p)}</span>
+            </div>
+            <div style={{marginBottom:3}}>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.faint,marginBottom:2}}>
+                <span style={{color:"#10b981"}}>Income</span><span style={{color:"#10b981"}}>{fmtRWF(v.rev)}</span>
+              </div>
+              <div style={{height:7,background:C.elevated,borderRadius:3,overflow:"hidden"}}>
+                <div style={{height:"100%",width:(v.rev/maxMonthVal*100)+"%",background:"linear-gradient(90deg,#10b981,#059669)",borderRadius:3,transition:"width .4s"}}/>
+              </div>
+            </div>
+            <div>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.faint,marginBottom:2}}>
+                <span style={{color:C.red}}>Expenses</span><span style={{color:C.red}}>{fmtRWF(v.cost)}</span>
+              </div>
+              <div style={{height:7,background:C.elevated,borderRadius:3,overflow:"hidden"}}>
+                <div style={{height:"100%",width:(v.cost/maxMonthVal*100)+"%",background:"linear-gradient(90deg,#ef4444,#dc2626)",borderRadius:3,transition:"width .4s"}}/>
+              </div>
+            </div>
+          </div>);
+        })
+      }
     </div>
-    <div style={{fontSize:14,fontWeight:700,color:C.accent,margin:"6px 0 12px"}}>✦ AI Financial Analysis</div>
-    <AIPrediction pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} topic="Full financial analysis: revenue optimization, expense reduction, break-even, scaling investment for Rwanda." label="Financial Strategy" icon="💰"/>
+
+    <div style={{fontSize:14,fontWeight:700,color:C.accent,margin:"16px 0 12px"}}>✦ AI Financial Analysis</div>
+    <AIPrediction pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} topic={`Full financial analysis Rwanda farm: income=${fmtRWF(totalIncome)}, expenses=${fmtRWF(totalExpense)}, net margin=${netMargin}%, ROI=${roi}%, feed is ${feedRatio}% of expenses, herd value=${fmtRWF(herdValue)}. Revenue optimization, expense reduction, break-even, scaling investment for Rwanda.`} label="Financial Strategy" icon="💰"/>
   </div>);
 }
 
