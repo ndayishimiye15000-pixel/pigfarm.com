@@ -583,7 +583,9 @@ function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,log
   const [form,setForm]=useState({sowId:"",boarId:"",matingDate:toDay(),notes:"",method:"Natural Service"});
   const [saved,setSaved]=useState(false);
   const [farrowingId,setFarrowingId]=useState(null);
+  const [farrowingConfirm,setFarrowingConfirm]=useState(null);
   const [pigletCount,setPigletCount]=useState("10");
+  const [stillbornCount,setStillbornCount]=useState("0");
   const sows=pigs.filter(p=>p.status==="active"&&(p.stage==="Sow"||p.stage==="Gilt"));
   const boars=pigs.filter(p=>p.status==="active"&&p.stage==="Boar");
 
@@ -614,9 +616,21 @@ function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,log
     setTimeout(()=>{setSaved(false);setForm({sowId:"",boarId:"",matingDate:toDay(),notes:"",method:"Natural Service"});},2500);
   }
 
-  async function updateStatus(id,status,piglets){
+  async function updateStatus(id,status,piglets,stillborn){
     const record=reproductions.find(x=>x.id===id);
-    const updated=reproductions.map(x=>x.id===id?{...x,status,piglets:piglets||x.piglets,farrowDate:status==="farrowed"?toDay():x.farrowDate}:x);
+    const farrowDate=status==="farrowed"?toDay():undefined;
+    // Generate weekly monitoring schedule for newborn piglets
+    let weeklyChecks=undefined;
+    if(status==="farrowed"&&piglets>0&&farrowDate){
+      weeklyChecks=[1,2,3,4,5,6,7,8].map(wk=>({week:wk,dueDate:addDays(farrowDate,wk*7),completed:false,notes:""}));
+    }
+    const updated=reproductions.map(x=>x.id===id?{
+      ...x,status,
+      piglets:piglets||x.piglets,
+      stillborn:stillborn||0,
+      farrowDate:farrowDate||x.farrowDate,
+      ...(weeklyChecks?{weeklyChecks}:{})
+    }:x);
     setReproductions(updated);
     fsSet("reproductions",updated);
     // When marked farrowed, record piglet value as capital income
@@ -757,16 +771,41 @@ function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,log
             ))}
           </div>
           {farrowingId===r.id?(
-            <div style={{display:"flex",gap:7,alignItems:"center",padding:"8px",background:"rgba(22,163,74,.06)",borderRadius:8,border:"1px solid rgba(22,163,74,.25)"}}>
-              <span style={{fontSize:12,color:C.muted,flexShrink:0}}>🐷 Piglets born:</span>
-              <input type="number" min="1" max="30" value={pigletCount} onChange={e=>setPigletCount(e.target.value)} style={{...S.inp,width:70,padding:"5px 8px",fontSize:13,textAlign:"center"}} autoFocus/>
-              <button style={{...S.btn(C.accent),padding:"7px 14px",fontSize:12,flexShrink:0}} onClick={()=>{updateStatus(r.id,"farrowed",parseInt(pigletCount)||10);setFarrowingId(null);setPigletCount("10");}}>✅ Confirm</button>
-              <button style={{...S.btn("#6b7280"),padding:"7px 10px",fontSize:12,flexShrink:0}} onClick={()=>{setFarrowingId(null);setPigletCount("10");}}>Cancel</button>
+            <div style={{background:"rgba(22,163,74,.06)",border:"1px solid rgba(22,163,74,.25)",borderRadius:10,padding:"12px 14px"}}>
+              <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:10}}>🐣 Birth Approval — Step 2 of 2</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:10}}>
+                <div>
+                  <label style={S.lbl}>🐷 Piglets Born *</label>
+                  <input type="number" min="1" max="30" value={pigletCount} onChange={e=>setPigletCount(e.target.value)} style={{...S.inp,fontSize:14,textAlign:"center"}} autoFocus/>
+                </div>
+                <div>
+                  <label style={S.lbl}>💀 Stillborn</label>
+                  <input type="number" min="0" max="20" value={stillbornCount||"0"} onChange={e=>setStillbornCount&&setStillbornCount(e.target.value)} style={{...S.inp,fontSize:14,textAlign:"center"}}/>
+                </div>
+              </div>
+              <div style={{fontSize:11,color:C.faint,marginBottom:10,padding:"7px 10px",background:C.elevated,borderRadius:7}}>
+                📋 Confirm all details are accurate. Once approved, piglet weekly monitoring will begin automatically.
+              </div>
+              <div style={{display:"flex",gap:7}}>
+                <button style={{...S.btn(C.accent),flex:1,padding:9,fontSize:13}} onClick={()=>{updateStatus(r.id,"farrowed",parseInt(pigletCount)||10,parseInt(stillbornCount)||0);setFarrowingId(null);setPigletCount("10");setStillbornCount&&setStillbornCount("0");}}>✅ Approve Birth & Start Monitoring</button>
+                <button style={{...S.btn("#6b7280"),padding:"9px 12px",fontSize:12}} onClick={()=>{setFarrowingId(null);setPigletCount("10");}}>Cancel</button>
+              </div>
+            </div>
+          ):farrowingConfirm===r.id?(
+            <div style={{background:"rgba(245,158,11,.06)",border:"1.5px solid rgba(245,158,11,.4)",borderRadius:10,padding:"12px 14px"}}>
+              <div style={{fontSize:13,fontWeight:700,color:C.amber,marginBottom:8}}>🐣 Birth Approval — Step 1 of 2</div>
+              <div style={{fontSize:12,color:C.text,marginBottom:10,lineHeight:1.6}}>
+                Confirm that <strong>{(pigs.find(p=>p.id===r.sowId)||{}).tag||"this sow"}</strong> has given birth. A worker or supervisor must verify the birth before recording piglets.
+              </div>
+              <div style={{display:"flex",gap:7}}>
+                <button style={{...S.btn(C.amber),flex:1,padding:9,fontSize:13,color:"#fff"}} onClick={()=>{setFarrowingConfirm(null);setFarrowingId(r.id);}}>✓ Birth Confirmed — Enter Piglet Details</button>
+                <button style={{...S.btn("#6b7280"),padding:"9px 12px",fontSize:12}} onClick={()=>setFarrowingConfirm(null)}>Cancel</button>
+              </div>
             </div>
           ):(
             <div style={{display:"flex",gap:7}}>
-              <button style={{...S.btn(C.accent),flex:1,padding:9,fontSize:12}} onClick={()=>{setFarrowingId(r.id);setPigletCount("10");}}>✅ Mark Farrowed</button>
-              <button style={{...S.btn(C.red),padding:"9px 14px",fontSize:12}} onClick={()=>{if(window.confirm("Mark as failed/aborted?"))updateStatus(r.id,"failed",0);}}>✗ Failed</button>
+              <button style={{...S.btn(C.accent),flex:1,padding:9,fontSize:12}} onClick={()=>setFarrowingConfirm(r.id)}>🐣 Approve Birth</button>
+              <button style={{...S.btn(C.red),padding:"9px 14px",fontSize:12}} onClick={()=>{if(window.confirm("Mark as failed/aborted?"))updateStatus(r.id,"failed",0,0);}}>✗ Failed</button>
             </div>
           )}
           {r.notes&&<div style={{fontSize:11,color:C.faint,marginTop:8,fontStyle:"italic",padding:"5px 9px",background:C.elevated,borderRadius:6}}>📝 {r.notes}</div>}
@@ -809,9 +848,48 @@ function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,log
         <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:10}}>✅ Completed Farrowings ({farrowed.length})</div>
         {farrowed.slice().reverse().map((r,i)=>{
           const sow=pigs.find(p=>p.id===r.sowId);
-          return(<div key={i} style={S.row}>
-            <div><div style={{fontWeight:600}}>{sow?sow.tag:"—"}</div><div style={{fontSize:11,color:C.faint}}>Mated: {r.matingDate} · Born: {r.farrowDate||r.expectedFarrow}</div></div>
-            <div style={{textAlign:"right"}}><div style={{fontWeight:700,color:C.accent}}>{r.piglets||0} 🐷</div><div style={{fontSize:11,color:"#10b981"}}>{fmtRWF((r.piglets||0)*10000)}</div></div>
+          const pendingChecks=(r.weeklyChecks||[]).filter(c=>!c.completed&&daysDiff(c.dueDate)<=0);
+          return(<div key={i} style={{...S.card,marginBottom:10,padding:"11px 14px",border:"1px solid "+(pendingChecks.length>0?"rgba(245,158,11,.4)":C.border)}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:pendingChecks.length>0?10:0}}>
+              <div>
+                <div style={{fontWeight:600,fontSize:13}}>{sow?sow.tag:"—"} <span style={{fontSize:10,color:C.faint}}>Mated: {r.matingDate} · Born: {r.farrowDate||r.expectedFarrow}</span></div>
+                <div style={{fontSize:11,color:C.muted,marginTop:2}}>
+                  🐷 {r.piglets||0} born · {r.stillborn>0?<span style={{color:C.red}}>💀 {r.stillborn} stillborn · </span>:""}
+                  <span style={{color:"#10b981",fontWeight:600}}>{fmtRWF((r.piglets||0)*10000)} est. value</span>
+                </div>
+              </div>
+              <div style={{textAlign:"right",fontSize:11,color:C.faint}}>
+                {r.weeklyChecks&&<span style={{padding:"2px 7px",borderRadius:12,background:pendingChecks.length>0?"rgba(245,158,11,.12)":"rgba(22,163,74,.1)",color:pendingChecks.length>0?C.amber:C.accent,fontWeight:600,fontSize:10}}>{pendingChecks.length>0?"⏰ "+pendingChecks.length+" check(s) due":"✅ On track"}</span>}
+              </div>
+            </div>
+            {/* Weekly monitoring */}
+            {r.weeklyChecks&&r.weeklyChecks.length>0&&(()=>{
+              const today=toDay();
+              const due=r.weeklyChecks.filter(c=>c.dueDate<=today);
+              const upcoming=r.weeklyChecks.filter(c=>c.dueDate>today).slice(0,2);
+              return(<div style={{background:C.elevated,borderRadius:8,padding:"9px 12px",marginTop:8}}>
+                <div style={{fontSize:11,fontWeight:700,color:C.text,marginBottom:7}}>📅 Weekly Piglet Monitoring</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                  {due.map(c=>(
+                    <div key={c.week} style={{padding:"4px 10px",borderRadius:20,background:c.completed?"rgba(22,163,74,.1)":"rgba(245,158,11,.1)",border:"1px solid "+(c.completed?"rgba(22,163,74,.3)":"rgba(245,158,11,.4)"),fontSize:10,fontWeight:600,color:c.completed?C.accent:C.amber,cursor:c.completed?"default":"pointer"}}
+                      onClick={()=>{
+                        if(!c.completed){
+                          const updated=reproductions.map(x=>x.id===r.id?{...x,weeklyChecks:(x.weeklyChecks||[]).map(wc=>wc.week===c.week?{...wc,completed:true,completedDate:toDay()}:wc)}:x);
+                          setReproductions(updated);fsSet("reproductions",updated);
+                        }
+                      }}>
+                      {c.completed?"✅":"⏰"} Wk {c.week} · {c.dueDate}
+                    </div>
+                  ))}
+                  {upcoming.map(c=>(
+                    <div key={c.week} style={{padding:"4px 10px",borderRadius:20,background:"rgba(100,116,139,.08)",border:"1px solid rgba(100,116,139,.2)",fontSize:10,color:C.faint}}>
+                      📆 Wk {c.week} · {c.dueDate}
+                    </div>
+                  ))}
+                </div>
+                {due.filter(c=>!c.completed).length>0&&<div style={{marginTop:7,fontSize:10,color:C.amber,fontWeight:600}}>⏰ {due.filter(c=>!c.completed).length} overdue check(s) — tap to mark complete</div>}
+              </div>);
+            })()}
           </div>);
         })}
         <div style={{marginTop:8,padding:"9px 12px",background:C.accentSoft,borderRadius:7,display:"flex",justifyContent:"space-between"}}>
@@ -822,7 +900,7 @@ function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,log
     </div>)}
 
     {/* LOG MATING */}
-    {tab==="log"&&(<div style={{maxWidth:500}}>
+    {tab==="log"&&(<div style={{maxWidth:540}}>
       {saved&&<div style={{padding:"11px 14px",background:C.accentSoft,borderRadius:8,marginBottom:14,color:C.accent,fontSize:13,fontWeight:600}}>
         ✅ Mating recorded! Expected birth: <strong>{form.matingDate?addDays(form.matingDate,GESTATION):"—"}</strong>
       </div>}
@@ -849,6 +927,60 @@ function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,log
           </div>
           <div><label style={S.lbl}>Mating Date *</label><input type="date" value={form.matingDate} onChange={e=>setForm({...form,matingDate:e.target.value})} style={S.inp}/></div>
         </div>
+
+        {/* ─── GENETIC COMPATIBILITY CHECK ─── */}
+        {(()=>{
+          if(!form.sowId||!form.boarId) return null;
+          const sow=pigs.find(p=>p.id===form.sowId);
+          const boar=pigs.find(p=>p.id===form.boarId);
+          if(!sow||!boar) return null;
+          const warnings=[];
+          const infos=[];
+          // Check same batch/source — possible siblings
+          if(sow.batchName&&boar.batchName&&sow.batchName===boar.batchName){
+            warnings.push("⚠️ Same batch origin ("+sow.batchName+") — possible siblings. Risk of inbreeding!");
+          }
+          if(sow.source&&boar.source&&sow.source===boar.source&&sow.arrivalDate&&boar.arrivalDate&&sow.arrivalDate===boar.arrivalDate){
+            warnings.push("⚠️ Same source farm & arrival date — may be related. Consider a different boar.");
+          }
+          // Check previous mating between same pair
+          const prevMatings=reproductions.filter(r=>r.sowId===sow.id&&r.boarId===boar.id);
+          if(prevMatings.length>=3){
+            warnings.push("⚠️ This pair has mated "+prevMatings.length+" times — rotate boar to improve genetic diversity.");
+          }
+          // Check sow already pregnant
+          const alreadyPreg=reproductions.find(r=>r.sowId===sow.id&&r.status==="pregnant");
+          if(alreadyPreg){
+            warnings.push("🚫 "+sow.tag+" is already pregnant! Expected birth: "+alreadyPreg.expectedFarrow);
+          }
+          // Check boar age / same breed cross info
+          if(sow.breed===boar.breed){
+            infos.push("✅ Same breed ("+sow.breed+") — purebred litter expected.");
+          } else {
+            infos.push("✅ Cross-breed match: "+sow.breed+" × "+boar.breed+" — hybrid vigour expected (higher growth rate).");
+          }
+          // Check sow history
+          const sc2=reproductions.filter(r=>r.sowId===sow.id&&r.status==="farrowed");
+          if(sc2.length>0){
+            const avgP=sc2.reduce((s,r)=>s+(r.piglets||0),0)/sc2.length;
+            infos.push("ℹ️ "+sow.tag+" has "+sc2.length+" previous litter(s), avg "+avgP.toFixed(1)+" piglets.");
+          }
+          if(warnings.length===0&&!alreadyPreg){
+            infos.push("✅ No inbreeding risks detected. Mating approved.");
+          }
+          const hasBlock=warnings.some(w=>w.startsWith("🚫"));
+          return(<div style={{marginBottom:12,borderRadius:9,border:"1.5px solid "+(warnings.length>0?"rgba(239,68,68,.4)":"rgba(22,163,74,.3)"),background:warnings.length>0?"rgba(239,68,68,.04)":"rgba(22,163,74,.04)",padding:"11px 14px"}}>
+            <div style={{fontSize:12,fontWeight:700,color:C.text,marginBottom:8}}>🧬 Genetic Compatibility Check</div>
+            {warnings.map((w,i)=>(
+              <div key={i} style={{fontSize:12,color:w.startsWith("🚫")?C.red:C.amber,marginBottom:5,display:"flex",gap:6}}>{w}</div>
+            ))}
+            {infos.map((inf,i)=>(
+              <div key={i} style={{fontSize:12,color:C.muted,marginBottom:4}}>{inf}</div>
+            ))}
+            {hasBlock&&<div style={{marginTop:8,fontSize:11,fontWeight:700,color:C.red,padding:"6px 10px",background:"rgba(239,68,68,.08)",borderRadius:6}}>⛔ This mating is blocked. Resolve the issue above before proceeding.</div>}
+          </div>);
+        })()}
+
         {form.matingDate&&<div style={{background:"rgba(22,163,74,.05)",border:"1px solid rgba(22,163,74,.2)",borderRadius:9,padding:"12px 14px",marginBottom:12}}>
           <div style={{fontSize:12,fontWeight:700,color:C.accent,marginBottom:8}}>📅 Auto-Calculated Key Dates:</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7,fontSize:12}}>
@@ -862,7 +994,15 @@ function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,log
           </div>
         </div>}
         <div style={{marginBottom:12}}><label style={S.lbl}>Notes</label><textarea rows={2} value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="e.g. first mating, AI done twice..." style={{...S.inp,resize:"vertical"}}/></div>
-        <button style={{...S.btn(C.pink),width:"100%",padding:13,fontSize:14,fontWeight:700}} onClick={logMating}>🐖 Record Mating & Generate Timeline →</button>
+        {(()=>{
+          // Block submit if sow is already pregnant
+          const sow=pigs.find(p=>p.id===form.sowId);
+          const alreadyPreg=sow&&reproductions.find(r=>r.sowId===sow.id&&r.status==="pregnant");
+          const blocked=!!alreadyPreg;
+          return(<button style={{...S.btn(blocked?"#9ca3af":C.pink),width:"100%",padding:13,fontSize:14,fontWeight:700,cursor:blocked?"not-allowed":"pointer"}} onClick={blocked?null:logMating} disabled={blocked}>
+            {blocked?"⛔ Mating Blocked — Sow Already Pregnant":"🐖 Record Mating & Generate Timeline →"}
+          </button>);
+        })()}
       </div>
     </div>)}
 
@@ -4369,57 +4509,291 @@ function Fin({feeds,sales,pigs,logs,expenses,incomes,allData,capital}){
 }
 
 /* ─── Pigs ─── */
-function Pigs({pigs,setPigs,logs,allData,capital,setCapital}){
-  const [show,setShow]=useState(false);
-  const [form,setForm]=useState({tag:"",breed:"Landrace",gender:"Female",stage:"Piglet",weight:"",dob:"",purchasePrice:""});
-  function add(){
-    if(!form.tag)return;
-    const price=parseFloat(form.purchasePrice)||0;
-    setPigs(p=>{const updated=[...p,{...form,id:uid(),weight:parseFloat(form.weight)||0,status:"active"}];fsSet("pigs",updated);return updated;});
-    if(setCapital&&price>0){
-      capitalTx(capital,setCapital,{type:"expense",category:"Pig Purchase",amount:price,description:`Pig ${form.tag} (${form.stage}, ${form.weight||0}kg) purchased`,date:toDay()});
-    }
-    setForm({tag:"",breed:"Landrace",gender:"Female",stage:"Piglet",weight:"",dob:"",purchasePrice:""});
-    setShow(false);
+/* ─── GROWTH MEASUREMENT MODAL ─── */
+function GrowthModal({pig,onSave,onClose}){
+  const [weight,setWeight]=useState(String(pig.weight||""));
+  const [length,setLength]=useState(String(pig.length||""));
+  const today=toDay();
+  function save(){
+    const w=parseFloat(weight);
+    const l=parseFloat(length)||null;
+    if(!w||w<=0)return;
+    const newMeasure={date:today,weight:w,length:l};
+    const history=[...(pig.measurements||[]),newMeasure];
+    onSave({weight:w,length:l||pig.length,measurements:history});
   }
-  const sc={Piglet:"#a78bfa",Weaner:"#60a5fa",Grower:"#10b981",Finisher:C.amber,Gilt:C.pink,Sow:C.red,Boar:"#fb923c"};
-  return(<div>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
-      <div><div style={S.h1}>Pig Records</div><div style={S.sub}>{pigs.filter(p=>p.status==="active").length} active pigs</div></div>
-      <div style={{display:"flex",gap:7}}><PDFBtn label="Herd PDF" type="health" getData={()=>allData} icon="🐷" color="#374151"/><button style={S.btn()} onClick={()=>setShow(!show)}>+ Add Pig</button></div>
-    </div>
-    {show&&<div style={S.card}>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:12}}>
-        <div><label style={S.lbl}>Tag</label><input placeholder="RW-004" value={form.tag} onChange={e=>setForm({...form,tag:e.target.value})} style={S.inp}/></div>
-        <div><label style={S.lbl}>Weight (kg)</label><input type="number" value={form.weight} onChange={e=>setForm({...form,weight:e.target.value})} style={S.inp}/></div>
-        <div><label style={S.lbl}>DOB</label><input type="date" value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} style={S.inp}/></div>
-        <div><label style={S.lbl}>Breed</label><select value={form.breed} onChange={e=>setForm({...form,breed:e.target.value})} style={S.inp}>{["Landrace","Large White","Duroc","Hampshire","Mixed/Local"].map(o=><option key={o}>{o}</option>)}</select></div>
-        <div><label style={S.lbl}>Gender</label><select value={form.gender} onChange={e=>setForm({...form,gender:e.target.value})} style={S.inp}><option>Female</option><option>Male</option></select></div>
-        <div><label style={S.lbl}>Stage</label><select value={form.stage} onChange={e=>setForm({...form,stage:e.target.value})} style={S.inp}>{["Piglet","Weaner","Grower","Finisher","Gilt","Sow","Boar"].map(o=><option key={o}>{o}</option>)}</select></div>
-        <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Purchase Price (RWF) — affects capital</label><input type="number" placeholder="e.g. 35000" value={form.purchasePrice} onChange={e=>setForm({...form,purchasePrice:e.target.value})} style={S.inp}/>{form.purchasePrice&&parseFloat(form.purchasePrice)>0&&<div style={{fontSize:11,color:C.red,marginTop:3}}>💰 RWF {fmtNum(parseFloat(form.purchasePrice))} will be deducted from capital as Pig Purchase</div>}</div>
+  const lastM=pig.measurements&&pig.measurements.length>0?pig.measurements[pig.measurements.length-1]:null;
+  const wGain=lastM&&parseFloat(weight)>0?Math.round((parseFloat(weight)-lastM.weight)*10)/10:null;
+  return(<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:24,width:340,boxShadow:"0 20px 60px rgba(0,0,0,.2)"}}>
+      <div style={{fontSize:16,fontWeight:700,marginBottom:4}}>📏 Record Growth — {pig.tag}</div>
+      <div style={{fontSize:11,color:C.faint,marginBottom:16}}>{pig.breed} · {pig.stage} · Today: {today}</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
+        <div>
+          <label style={S.lbl}>Weight (kg) *</label>
+          <input type="number" step="0.1" value={weight} onChange={e=>setWeight(e.target.value)} style={S.inp} autoFocus/>
+          {wGain!==null&&<div style={{fontSize:10,marginTop:3,color:wGain>0?C.accent:C.red,fontWeight:600}}>{wGain>0?"+":""}{wGain}kg since last record</div>}
+        </div>
+        <div>
+          <label style={S.lbl}>Body Length (cm)</label>
+          <input type="number" step="0.5" value={length} onChange={e=>setLength(e.target.value)} placeholder="e.g. 85" style={S.inp}/>
+          <div style={{fontSize:9,color:C.faint,marginTop:2}}>Tip-to-tail length</div>
+        </div>
       </div>
-      <button style={S.btn()} onClick={add}>Save Pig</button>
-      <button style={S.btn("#374151")} onClick={()=>setShow(false)}>Cancel</button>
+      {pig.measurements&&pig.measurements.length>0&&<div style={{background:C.elevated,borderRadius:8,padding:"9px 12px",marginBottom:14,fontSize:11}}>
+        <div style={{fontWeight:600,color:C.text,marginBottom:6}}>📈 Growth History (last 3)</div>
+        {pig.measurements.slice(-3).reverse().map((m,i)=>(
+          <div key={i} style={{display:"flex",justifyContent:"space-between",color:C.muted,padding:"2px 0",borderBottom:i<2?"1px solid "+C.border:"none"}}>
+            <span>{m.date}</span>
+            <span style={{fontWeight:600,color:C.text}}>{m.weight}kg{m.length?" · "+m.length+"cm":""}</span>
+          </div>
+        ))}
+      </div>}
+      <div style={{display:"flex",gap:8}}>
+        <button onClick={save} style={{...S.btn(C.accent),flex:1,padding:10,fontSize:13}}>✓ Save Measurement</button>
+        <button onClick={onClose} style={{...S.btn("#374151"),padding:"10px 14px",fontSize:13}}>Cancel</button>
+      </div>
+    </div>
+  </div>);
+}
+
+function Pigs({pigs,setPigs,logs,allData,capital,setCapital}){
+  const BLANK_FORM={tag:"",breed:"Landrace",gender:"Female",stage:"Piglet",weight:"",length:"",dob:"",arrivalDate:toDay(),source:"",batchName:"",purchasePrice:""};
+  const [mode,setMode]=useState(null); // null | "single" | "batch"
+  const [form,setForm]=useState(BLANK_FORM);
+  const [batchCount,setBatchCount]=useState("5");
+  const [batchRows,setBatchRows]=useState([]);
+  const [saved,setSaved]=useState(false);
+  const [undoStack,setUndoStack]=useState([]); // [{pig, timestamp}]
+  const [undoBanner,setUndoBanner]=useState(null);
+  const [growthPig,setGrowthPig]=useState(null); // pig for growth modal
+  const [searchQ,setSearchQ]=useState("");
+  const [filterStage,setFilterStage]=useState("");
+  const [editPigId,setEditPigId]=useState(null);
+  const [editForm,setEditForm]=useState(null);
+
+  function initBatch(){
+    const n=parseInt(batchCount)||5;
+    const rows=Array.from({length:n},(_,i)=>({...BLANK_FORM,tag:`RW-${String(Date.now()).slice(-4)}${i+1}`,id:uid()}));
+    setBatchRows(rows);
+  }
+
+  function addSingle(){
+    if(!form.tag.trim()){alert("Tag is required");return;}
+    const price=parseFloat(form.purchasePrice)||0;
+    const newPig={...form,id:uid(),weight:parseFloat(form.weight)||0,length:parseFloat(form.length)||null,status:"active",measurements:[]};
+    setPigs(p=>{const updated=[...p,newPig];fsSet("pigs",updated);return updated;});
+    if(setCapital&&price>0){
+      capitalTx(capital,setCapital,{type:"expense",category:"Pig Purchase",amount:price,description:`Pig ${form.tag} (${form.stage}, ${form.weight||0}kg) from ${form.source||"unknown source"}`,date:form.arrivalDate||toDay()});
+    }
+    setForm(BLANK_FORM);setMode(null);setSaved(true);setTimeout(()=>setSaved(false),3000);
+  }
+
+  function addBatch(){
+    const valid=batchRows.filter(r=>r.tag.trim());
+    if(!valid.length){alert("Fill in at least one tag");return;}
+    const totalPrice=valid.reduce((s,r)=>s+(parseFloat(r.purchasePrice)||0),0);
+    const newPigs=valid.map(r=>({...r,weight:parseFloat(r.weight)||0,length:parseFloat(r.length)||null,status:"active",measurements:[]}));
+    setPigs(p=>{const updated=[...p,...newPigs];fsSet("pigs",updated);return updated;});
+    if(setCapital&&totalPrice>0){
+      capitalTx(capital,setCapital,{type:"expense",category:"Pig Purchase",amount:totalPrice,description:`Batch registration: ${valid.length} pigs (${valid[0].batchName||"no batch name"})`,date:valid[0].arrivalDate||toDay()});
+    }
+    setBatchRows([]);setMode(null);setSaved(true);setTimeout(()=>setSaved(false),3000);
+  }
+
+  function deletePig(pig){
+    setUndoStack(prev=>[...prev,{pig,timestamp:Date.now()}]);
+    setPigs(prev=>{const updated=prev.filter(p=>p.id!==pig.id);fsSet("pigs",updated);return updated;});
+    setUndoBanner(pig.id);
+    setTimeout(()=>setUndoBanner(null),8000);
+  }
+
+  function undoDelete(pigId){
+    const entry=undoStack.find(u=>u.pig.id===pigId);
+    if(!entry)return;
+    setPigs(prev=>{const updated=[...prev,entry.pig];fsSet("pigs",updated);return updated;});
+    setUndoStack(prev=>prev.filter(u=>u.pig.id!==pigId));
+    setUndoBanner(null);
+  }
+
+  function saveGrowth(pigId,updates){
+    setPigs(prev=>{const updated=prev.map(p=>p.id===pigId?{...p,...updates}:p);fsSet("pigs",updated);return updated;});
+    setGrowthPig(null);
+  }
+
+  function saveEdit(){
+    if(!editForm)return;
+    setPigs(prev=>{const updated=prev.map(p=>p.id===editPigId?{...p,...editForm,weight:parseFloat(editForm.weight)||p.weight,length:parseFloat(editForm.length)||p.length}:p);fsSet("pigs",updated);return updated;});
+    setEditPigId(null);setEditForm(null);
+  }
+
+  const sc={Piglet:"#a78bfa",Weaner:"#60a5fa",Grower:"#10b981",Finisher:C.amber,Gilt:C.pink,Sow:C.red,Boar:"#fb923c"};
+  const activePigs=pigs.filter(p=>p.status==="active");
+  const filtered=pigs.filter(p=>{
+    if(filterStage&&p.stage!==filterStage)return false;
+    if(searchQ){const q=searchQ.toLowerCase();return(p.tag||"").toLowerCase().includes(q)||(p.breed||"").toLowerCase().includes(q)||(p.source||"").toLowerCase().includes(q)||(p.batchName||"").toLowerCase().includes(q);}
+    return true;
+  });
+
+  const BREEDS=["Landrace","Large White","Duroc","Hampshire","Mixed/Local"];
+  const STAGES=["Piglet","Weaner","Grower","Finisher","Gilt","Sow","Boar"];
+
+  return(<div>
+    {/* Growth modal */}
+    {growthPig&&<GrowthModal pig={growthPig} onSave={(u)=>saveGrowth(growthPig.id,u)} onClose={()=>setGrowthPig(null)}/>}
+
+    {/* Undo banner */}
+    {undoBanner&&<div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",zIndex:9990,display:"flex",alignItems:"center",gap:12,background:"#1e293b",color:"#fff",padding:"12px 18px",borderRadius:12,boxShadow:"0 8px 32px rgba(0,0,0,.3)",fontSize:13}}>
+      🗑️ Pig deleted.
+      <button onClick={()=>undoDelete(undoBanner)} style={{padding:"5px 14px",borderRadius:7,border:"none",background:C.accent,color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>↩ Undo</button>
+      <button onClick={()=>setUndoBanner(null)} style={{background:"none",border:"none",color:"rgba(255,255,255,.5)",cursor:"pointer",fontSize:16,lineHeight:1}}>×</button>
     </div>}
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:12}}>
-      {pigs.map(p=>(
-        <div key={p.id} style={{...S.card,marginBottom:0,opacity:p.status==="active"?1:0.5}}>
-          <div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}>
-            <div style={{fontSize:14,fontWeight:700}}>🐷 {p.tag}</div>
-            <span style={{padding:"2px 8px",borderRadius:20,background:(sc[p.stage]||C.accent)+"22",color:sc[p.stage]||C.accent,fontSize:10,fontWeight:600}}>{p.stage}</span>
+
+    {saved&&<div style={{padding:"11px 14px",background:C.accentSoft,border:"1px solid rgba(22,163,74,.3)",borderRadius:9,marginBottom:14,color:C.accent,fontWeight:600}}>✅ Pig(s) registered successfully!</div>}
+
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
+      <div><div style={S.h1}>🐷 Pig Records</div><div style={S.sub}>{activePigs.length} active · {pigs.filter(p=>p.status==="sold").length} sold</div></div>
+      <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
+        <PDFBtn label="Herd PDF" type="health" getData={()=>allData} icon="🐷" color="#374151"/>
+        <button style={S.btn()} onClick={()=>setMode(mode==="single"?null:"single")}>+ Add Pig</button>
+        <button style={{...S.btn("#1d4ed8")}} onClick={()=>{setMode(mode==="batch"?null:"batch");initBatch();}}>📋 Batch Register</button>
+      </div>
+    </div>
+
+    {/* SINGLE PIG FORM */}
+    {mode==="single"&&<div style={{...S.card,marginBottom:16}}>
+      <div style={{fontSize:14,fontWeight:700,color:C.accent,marginBottom:12}}>➕ Register New Pig</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:12}}>
+        <div><label style={S.lbl}>Tag *</label><input placeholder="RW-004" value={form.tag} onChange={e=>setForm({...form,tag:e.target.value})} style={S.inp}/></div>
+        <div><label style={S.lbl}>Weight (kg)</label><input type="number" step="0.1" value={form.weight} onChange={e=>setForm({...form,weight:e.target.value})} style={S.inp}/></div>
+        <div><label style={S.lbl}>Length (cm)</label><input type="number" step="0.5" value={form.length} onChange={e=>setForm({...form,length:e.target.value})} placeholder="e.g. 85" style={S.inp}/></div>
+        <div><label style={S.lbl}>Breed</label><select value={form.breed} onChange={e=>setForm({...form,breed:e.target.value})} style={S.inp}>{BREEDS.map(o=><option key={o}>{o}</option>)}</select></div>
+        <div><label style={S.lbl}>Gender</label><select value={form.gender} onChange={e=>setForm({...form,gender:e.target.value})} style={S.inp}><option>Female</option><option>Male</option></select></div>
+        <div><label style={S.lbl}>Stage</label><select value={form.stage} onChange={e=>setForm({...form,stage:e.target.value})} style={S.inp}>{STAGES.map(o=><option key={o}>{o}</option>)}</select></div>
+        <div><label style={S.lbl}>Date of Birth</label><input type="date" value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} style={S.inp}/></div>
+        <div><label style={S.lbl}>Arrival Date</label><input type="date" value={form.arrivalDate} onChange={e=>setForm({...form,arrivalDate:e.target.value})} style={S.inp}/></div>
+        <div><label style={S.lbl}>Source Farm / Supplier</label><input placeholder="e.g. Musanze Farm" value={form.source} onChange={e=>setForm({...form,source:e.target.value})} style={S.inp}/></div>
+        <div><label style={S.lbl}>Batch Name (optional)</label><input placeholder="e.g. Batch-2025-A" value={form.batchName} onChange={e=>setForm({...form,batchName:e.target.value})} style={S.inp}/></div>
+        <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Purchase Price (RWF) — deducted from capital</label><input type="number" placeholder="e.g. 35000" value={form.purchasePrice} onChange={e=>setForm({...form,purchasePrice:e.target.value})} style={S.inp}/>{form.purchasePrice&&parseFloat(form.purchasePrice)>0&&<div style={{fontSize:11,color:C.red,marginTop:3}}>💰 {fmtRWF(parseFloat(form.purchasePrice))} will be recorded as Pig Purchase expense</div>}</div>
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        <button style={{...S.btn(),flex:1,padding:11}} onClick={addSingle}>✅ Register Pig</button>
+        <button style={S.btn("#374151")} onClick={()=>setMode(null)}>Cancel</button>
+      </div>
+    </div>}
+
+    {/* BATCH REGISTRATION FORM */}
+    {mode==="batch"&&<div style={{...S.card,marginBottom:16}}>
+      <div style={{fontSize:14,fontWeight:700,color:"#1d4ed8",marginBottom:4}}>📋 Batch Pig Registration</div>
+      <div style={{fontSize:12,color:C.faint,marginBottom:12}}>Register multiple pigs arriving together (same batch/source)</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:12,padding:"12px",background:"rgba(29,78,216,.04)",borderRadius:9,border:"1px solid rgba(29,78,216,.15)"}}>
+        <div><label style={S.lbl}>Number of Pigs</label>
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <input type="number" min="1" max="50" value={batchCount} onChange={e=>setBatchCount(e.target.value)} style={{...S.inp,width:70}} />
+            <button onClick={initBatch} style={{...S.btn("#1d4ed8"),fontSize:11,padding:"8px 12px",flexShrink:0}}>Generate</button>
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,fontSize:11}}>
-            {[["Breed",p.breed],["Gender",p.gender],["Weight",p.weight+"kg"],["Market Val",fmtRWF(p.status==="active"?getMarketPrice(p.stage,p.weight):0)]].map(([l,v])=>(
-              <div key={l} style={{background:C.elevated,borderRadius:5,padding:"4px 7px"}}><div style={{color:C.faint,fontSize:9}}>{l}</div><div style={{color:l==="Market Val"?C.accent:C.text,marginTop:1,fontWeight:l==="Market Val"?700:400}}>{v}</div></div>
+        </div>
+        <div><label style={S.lbl}>Batch Name</label><input placeholder="e.g. Batch-2025-A" value={form.batchName} onChange={e=>{setForm({...form,batchName:e.target.value});setBatchRows(r=>r.map(row=>({...row,batchName:e.target.value})));}} style={S.inp}/></div>
+        <div><label style={S.lbl}>Arrival Date</label><input type="date" value={form.arrivalDate} onChange={e=>{setForm({...form,arrivalDate:e.target.value});setBatchRows(r=>r.map(row=>({...row,arrivalDate:e.target.value})));}} style={S.inp}/></div>
+        <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Source Farm / Supplier (applies to all)</label><input placeholder="e.g. Musanze Farm Co-op" value={form.source} onChange={e=>{setForm({...form,source:e.target.value});setBatchRows(r=>r.map(row=>({...row,source:e.target.value})));}} style={S.inp}/></div>
+      </div>
+      {batchRows.length>0&&<div style={{overflowX:"auto",marginBottom:12}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+          <thead><tr style={{background:C.elevated}}>
+            {["Tag *","Breed","Gender","Stage","Weight (kg)","Length (cm)","Price (RWF)"].map(h=><th key={h} style={{padding:"7px 8px",textAlign:"left",color:C.faint,fontWeight:600,fontSize:10,borderBottom:"1px solid "+C.border}}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {batchRows.map((row,i)=>(
+              <tr key={i} style={{borderBottom:"1px solid "+C.elevated}}>
+                <td style={{padding:"4px 6px"}}><input value={row.tag} onChange={e=>setBatchRows(r=>r.map((x,j)=>j===i?{...x,tag:e.target.value}:x))} style={{...S.inp,padding:"5px 7px",fontSize:12}} placeholder={`RW-00${i+1}`}/></td>
+                <td style={{padding:"4px 6px"}}><select value={row.breed} onChange={e=>setBatchRows(r=>r.map((x,j)=>j===i?{...x,breed:e.target.value}:x))} style={{...S.inp,padding:"5px 7px",fontSize:12}}>{BREEDS.map(o=><option key={o}>{o}</option>)}</select></td>
+                <td style={{padding:"4px 6px"}}><select value={row.gender} onChange={e=>setBatchRows(r=>r.map((x,j)=>j===i?{...x,gender:e.target.value}:x))} style={{...S.inp,padding:"5px 7px",fontSize:12}}><option>Female</option><option>Male</option></select></td>
+                <td style={{padding:"4px 6px"}}><select value={row.stage} onChange={e=>setBatchRows(r=>r.map((x,j)=>j===i?{...x,stage:e.target.value}:x))} style={{...S.inp,padding:"5px 7px",fontSize:12}}>{STAGES.map(o=><option key={o}>{o}</option>)}</select></td>
+                <td style={{padding:"4px 6px"}}><input type="number" value={row.weight} onChange={e=>setBatchRows(r=>r.map((x,j)=>j===i?{...x,weight:e.target.value}:x))} style={{...S.inp,padding:"5px 7px",fontSize:12}} placeholder="0"/></td>
+                <td style={{padding:"4px 6px"}}><input type="number" value={row.length} onChange={e=>setBatchRows(r=>r.map((x,j)=>j===i?{...x,length:e.target.value}:x))} style={{...S.inp,padding:"5px 7px",fontSize:12}} placeholder="0"/></td>
+                <td style={{padding:"4px 6px"}}><input type="number" value={row.purchasePrice} onChange={e=>setBatchRows(r=>r.map((x,j)=>j===i?{...x,purchasePrice:e.target.value}:x))} style={{...S.inp,padding:"5px 7px",fontSize:12}} placeholder="0"/></td>
+              </tr>
             ))}
-          </div>
-          <button onClick={()=>setPigs(prev=>{const updated=prev.map(pig=>pig.id===p.id?{...pig,status:pig.status==="active"?"sold":"active"}:pig);fsSet("pigs",updated);return updated;})} style={{marginTop:8,width:"100%",padding:5,borderRadius:6,border:"1px solid "+C.border,background:"transparent",color:C.faint,fontSize:10,cursor:"pointer"}}>
-            {p.status==="active"?"Mark as Sold":"Reactivate"}
-          </button>
-          {p.status==="active"&&<PigHealthAI pig={p} logs={logs}/>}
+          </tbody>
+        </table>
+        {batchRows.reduce((s,r)=>s+(parseFloat(r.purchasePrice)||0),0)>0&&(
+          <div style={{marginTop:8,fontSize:12,color:C.red,fontWeight:600}}>💰 Total batch cost: {fmtRWF(batchRows.reduce((s,r)=>s+(parseFloat(r.purchasePrice)||0),0))}</div>
+        )}
+      </div>}
+      <div style={{display:"flex",gap:8}}>
+        <button style={{...S.btn("#1d4ed8"),flex:1,padding:11}} onClick={addBatch} disabled={!batchRows.length}>✅ Register {batchRows.filter(r=>r.tag.trim()).length} Pig(s)</button>
+        <button style={S.btn("#374151")} onClick={()=>setMode(null)}>Cancel</button>
+      </div>
+    </div>}
+
+    {/* SEARCH + FILTER */}
+    {pigs.length>0&&<div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:10,marginBottom:14}}>
+      <input placeholder="🔍 Search by tag, breed, source, batch…" value={searchQ} onChange={e=>setSearchQ(e.target.value)} style={S.inp}/>
+      <select value={filterStage} onChange={e=>setFilterStage(e.target.value)} style={{...S.inp,width:"auto"}}>
+        <option value="">All Stages</option>
+        {STAGES.map(s=><option key={s}>{s}</option>)}
+      </select>
+    </div>}
+
+    {/* PIG CARDS */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:12}}>
+      {filtered.map(p=>(
+        <div key={p.id} style={{...S.card,marginBottom:0,opacity:p.status==="active"?1:0.55,border:"1px solid "+(p.status==="active"?C.border:"rgba(100,116,139,.2)")}}>
+          {editPigId===p.id&&editForm?(
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:C.accent,marginBottom:9}}>✏️ Edit {p.tag}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:9}}>
+                <div><label style={S.lbl}>Weight (kg)</label><input type="number" value={editForm.weight} onChange={e=>setEditForm({...editForm,weight:e.target.value})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Length (cm)</label><input type="number" value={editForm.length||""} onChange={e=>setEditForm({...editForm,length:e.target.value})} style={S.inp}/></div>
+                <div><label style={S.lbl}>Stage</label><select value={editForm.stage} onChange={e=>setEditForm({...editForm,stage:e.target.value})} style={S.inp}>{STAGES.map(o=><option key={o}>{o}</option>)}</select></div>
+                <div><label style={S.lbl}>Breed</label><select value={editForm.breed} onChange={e=>setEditForm({...editForm,breed:e.target.value})} style={S.inp}>{BREEDS.map(o=><option key={o}>{o}</option>)}</select></div>
+                <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Source</label><input value={editForm.source||""} onChange={e=>setEditForm({...editForm,source:e.target.value})} style={S.inp}/></div>
+              </div>
+              <div style={{display:"flex",gap:6}}>
+                <button onClick={saveEdit} style={{...S.btn(C.accent),flex:1,padding:"7px",fontSize:12}}>✓ Save</button>
+                <button onClick={()=>{setEditPigId(null);setEditForm(null);}} style={{...S.btn("#374151"),padding:"7px",fontSize:12}}>Cancel</button>
+              </div>
+            </div>
+          ):(
+            <>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                <div style={{fontSize:14,fontWeight:700}}>🐷 {p.tag}</div>
+                <span style={{padding:"2px 8px",borderRadius:20,background:(sc[p.stage]||C.accent)+"22",color:sc[p.stage]||C.accent,fontSize:10,fontWeight:600}}>{p.stage}</span>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,fontSize:11,marginBottom:8}}>
+                {[["Breed",p.breed],["Gender",p.gender],["Weight",p.weight+"kg"],["Length",p.length?(p.length+"cm"):"—"],["Market Val",fmtRWF(p.status==="active"?getMarketPrice(p.stage,p.weight):0)],["Arrived",p.arrivalDate||"—"]].map(([l,v])=>(
+                  <div key={l} style={{background:C.elevated,borderRadius:5,padding:"4px 7px"}}><div style={{color:C.faint,fontSize:9}}>{l}</div><div style={{color:l==="Market Val"?C.accent:C.text,marginTop:1,fontWeight:l==="Market Val"?700:400}}>{v}</div></div>
+                ))}
+              </div>
+              {(p.source||p.batchName)&&<div style={{fontSize:10,color:C.faint,marginBottom:8,padding:"4px 7px",background:C.elevated,borderRadius:5}}>
+                {p.source&&<span>📍 {p.source}</span>}{p.source&&p.batchName&&" · "}{p.batchName&&<span>📦 {p.batchName}</span>}
+              </div>}
+              {p.measurements&&p.measurements.length>1&&(()=>{
+                const hist=p.measurements;
+                const last=hist[hist.length-1];
+                const prev=hist[hist.length-2];
+                const gain=Math.round((last.weight-prev.weight)*10)/10;
+                return(<div style={{fontSize:10,color:gain>=0?C.accent:C.red,marginBottom:8,padding:"3px 7px",background:gain>=0?C.accentSoft:"rgba(239,68,68,.06)",borderRadius:5,fontWeight:600}}>
+                  📈 Last gain: {gain>=0?"+":""}{gain}kg · {last.date}
+                </div>);
+              })()}
+              <div style={{display:"flex",gap:5,marginBottom:6}}>
+                {p.status==="active"&&<button onClick={()=>setGrowthPig(p)} style={{flex:1,padding:"5px",borderRadius:6,border:"1px solid "+C.border,background:C.accentSoft,color:C.accent,fontSize:10,cursor:"pointer",fontWeight:600}}>📏 Record Growth</button>}
+                <button onClick={()=>setPigs(prev=>{const updated=prev.map(pig=>pig.id===p.id?{...pig,status:pig.status==="active"?"sold":"active"}:pig);fsSet("pigs",updated);return updated;})} style={{flex:1,padding:5,borderRadius:6,border:"1px solid "+C.border,background:"transparent",color:C.faint,fontSize:10,cursor:"pointer"}}>
+                  {p.status==="active"?"Mark Sold":"Reactivate"}
+                </button>
+              </div>
+              <div style={{display:"flex",gap:5}}>
+                <button onClick={()=>{setEditPigId(p.id);setEditForm({weight:String(p.weight),length:String(p.length||""),stage:p.stage,breed:p.breed,source:p.source||""});}} style={{flex:1,padding:"4px",borderRadius:6,border:"1px solid "+C.border,background:"transparent",color:C.muted,fontSize:10,cursor:"pointer"}}>✏️ Edit</button>
+                <button onClick={()=>deletePig(p)} style={{flex:1,padding:"4px",borderRadius:6,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,fontSize:10,cursor:"pointer"}}>🗑️ Delete</button>
+              </div>
+              {p.status==="active"&&<PigHealthAI pig={p} logs={logs}/>}
+            </>
+          )}
         </div>
       ))}
     </div>
+    {filtered.length===0&&pigs.length>0&&<div style={{...S.card,textAlign:"center",color:C.faint,padding:30}}>No pigs match your search/filter.</div>}
   </div>);
 }
 
