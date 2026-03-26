@@ -2250,7 +2250,7 @@ function RemoteWorkAdmin({sessions,setSessions,users}){
 /* ═══════════════════════════════════════════════════
    APPROVAL PANEL — Admin reviews all pending entries
 ═══════════════════════════════════════════════════ */
-function ApprovalPanel({feeds,setFeeds,logs,setLogs,sales,setSales,expenses,setExpenses,pigs,setPigs,capital,setCapital}){
+function ApprovalPanel({feeds,setFeeds,logs,setLogs,sales,setSales,expenses,setExpenses,pigs,setPigs,capital,setCapital,pushUndo}){
   const [toast,setToast]=useState(null);
   const [tab,setTab]=useState("all");
   function showToast(msg,type="success"){setToast({msg,type});setTimeout(()=>setToast(null),3000);}
@@ -2297,10 +2297,26 @@ function ApprovalPanel({feeds,setFeeds,logs,setLogs,sales,setSales,expenses,setE
 
   function rejectItem(type,id){
     if(!window.confirm("Reject and delete this entry permanently?"))return;
-    if(type==="feed"){const u=feeds.filter(x=>x.id!==id);setFeeds(u);fsSet("feeds",u);showToast("🗑️ Feed log rejected","error");}
-    else if(type==="log"){const u=logs.filter(x=>x.id!==id);setLogs(u);fsSet("logs",u);showToast("🗑️ Daily log rejected","error");}
-    else if(type==="sale"){const u=sales.filter(x=>x.id!==id);setSales(u);fsSet("sales",u);showToast("🗑️ Sale rejected","error");}
-    else if(type==="expense"){const u=expenses.filter(x=>x.id!==id);setExpenses(u);fsSet("expenses",u);showToast("🗑️ Purchase rejected","error");}
+    if(type==="feed"){
+      const deleted=feeds.find(x=>x.id===id);
+      const u=feeds.filter(x=>x.id!==id);setFeeds(u);fsSet("feeds",u);showToast("🗑️ Feed log rejected","error");
+      if(pushUndo&&deleted) pushUndo("Feed log ("+deleted.feedType+" "+deleted.kg+"kg)",()=>{const r=[...feeds.filter(x=>x.id!==deleted.id),deleted];setFeeds(r);fsSet("feeds",r);});
+    }
+    else if(type==="log"){
+      const deleted=logs.find(x=>x.id===id);
+      const u=logs.filter(x=>x.id!==id);setLogs(u);fsSet("logs",u);showToast("🗑️ Daily log rejected","error");
+      if(pushUndo&&deleted) pushUndo("Daily log ("+deleted.worker+" "+deleted.date+")",()=>{const r=[...logs.filter(x=>x.id!==deleted.id),deleted];setLogs(r);fsSet("logs",r);});
+    }
+    else if(type==="sale"){
+      const deleted=sales.find(x=>x.id===id);
+      const u=sales.filter(x=>x.id!==id);setSales(u);fsSet("sales",u);showToast("🗑️ Sale rejected","error");
+      if(pushUndo&&deleted) pushUndo("Sale ("+fmtRWF(deleted.total)+" — "+deleted.worker+")",()=>{const r=[...sales.filter(x=>x.id!==deleted.id),deleted];setSales(r);fsSet("sales",r);});
+    }
+    else if(type==="expense"){
+      const deleted=expenses.find(x=>x.id===id);
+      const u=expenses.filter(x=>x.id!==id);setExpenses(u);fsSet("expenses",u);showToast("🗑️ Purchase rejected","error");
+      if(pushUndo&&deleted) pushUndo("Purchase ("+(deleted.item||deleted.category)+")",()=>{const r=[...expenses.filter(x=>x.id!==deleted.id),deleted];setExpenses(r);fsSet("expenses",r);});
+    }
   }
 
   function approveAll(){
@@ -2425,6 +2441,15 @@ function App(){
   const [sessionLoaded,setSessionLoaded]=useState(false);
   const [globalRefreshing,setGlobalRefreshing]=useState(false);
   const [lastRefresh,setLastRefresh]=useState("");
+  const [undoStack,setUndoStack]=useState([]); // [{type,data,label,timestamp}]
+  const [undoToast,setUndoToast]=useState(null);
+  const undoTimerRef=useRef(null);
+  function pushUndo(label,undoFn){
+    if(undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    setUndoToast({label,onUndo:undoFn});
+    undoTimerRef.current=setTimeout(()=>setUndoToast(null),5500);
+  }
+  function clearUndo(){setUndoToast(null);if(undoTimerRef.current)clearTimeout(undoTimerRef.current);}
 
   async function refreshAll(){
     if(globalRefreshing) return;
@@ -2641,6 +2666,7 @@ function App(){
 
   return(<div style={S.app}>
     {showApiModal&&<ApiKeyModal onClose={()=>setShowApiModal(false)}/>}
+    {undoToast&&<UndoToast label={undoToast.label} onUndo={undoToast.onUndo} onClose={clearUndo}/>}
     <div style={S.side}>
       <div style={{padding:"18px 18px 16px",borderBottom:"1px solid rgba(255,255,255,.12)",marginBottom:6,flexShrink:0}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -2727,7 +2753,7 @@ function App(){
       {isAdmin&&page==="profitinsight"&&<ProfitInsight pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} capital={capital}/>}
       {isAdmin&&page==="feedefficiency"&&<FeedEfficiency pigs={pigs} feeds={feeds} logs={logs} expenses={expenses} sales={sales} incomes={incomes}/>}
       {isAdmin&&page==="pigperformance"&&<PigPerformance pigs={pigs} logs={logs} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} reproductions={reproductions}/>}
-      {isAdmin&&page==="approvals"&&<ApprovalPanel feeds={feeds} setFeeds={setFeeds} logs={logs} setLogs={setLogs} sales={sales} setSales={setSales} expenses={expenses} setExpenses={setExpenses} pigs={pigs} setPigs={setPigs} capital={capital} setCapital={setCapital}/>}
+      {isAdmin&&page==="approvals"&&<ApprovalPanel feeds={feeds} setFeeds={setFeeds} logs={logs} setLogs={setLogs} sales={sales} setSales={setSales} expenses={expenses} setExpenses={setExpenses} pigs={pigs} setPigs={setPigs} capital={capital} setCapital={setCapital} pushUndo={pushUndo}/>}
       {isAdmin&&page==="bigdata"&&<BigData pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} users={users} capital={capital}/>}
       {isAdmin&&page==="home"&&<AHome pigs={pigs} feeds={feeds} sales={sales} logs={logs} users={users} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} allData={allData} setPage={setPage} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="ai"&&<AIAdvisor pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
@@ -2743,7 +2769,7 @@ function App(){
       {isAdmin&&page==="daylogs"&&<DLogs logs={logs} setLogs={setLogs} pigs={pigs} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} allData={allData} user={user}/>}
       {isAdmin&&page==="messages"&&<AIMessages users={users} messages={messages} setMessages={setMessages} pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
       {isAdmin&&page==="workers"&&<Workers users={users} setUsers={setUsers}/>}
-      {isAdmin&&page==="workerdata"&&<AdminWorkerDataEditor feeds={feeds} setFeeds={setFeeds} logs={logs} setLogs={setLogs} sales={sales} setSales={setSales} expenses={expenses} setExpenses={setExpenses} incomes={incomes} capital={capital} setCapital={setCapital} pigs={pigs} users={users}/>}
+      {isAdmin&&page==="workerdata"&&<AdminWorkerDataEditor feeds={feeds} setFeeds={setFeeds} logs={logs} setLogs={setLogs} sales={sales} setSales={setSales} expenses={expenses} setExpenses={setExpenses} incomes={incomes} capital={capital} setCapital={setCapital} pigs={pigs} users={users} pushUndo={pushUndo}/>}
       {isAdmin&&page==="remote"&&<RemoteWorkAdmin sessions={sessions} setSessions={setSessions} users={users}/>}
       {isAdmin&&page==="capital"&&<CapitalManager capital={capital} setCapital={setCapital} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} pigs={pigs} user={user}/>}
       {isAdmin&&page==="adminbuy"&&<BEntry user={user} expenses={expenses} setExpenses={setExpenses} capital={capital} setCapital={setCapital}/>}
@@ -5335,6 +5361,29 @@ function Toast({message,type,onClose}){
   );
 }
 
+/* ─── Undo Toast ─── */
+function UndoToast({label,onUndo,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,5500);return()=>clearTimeout(t);},[onClose]);
+  return(
+    <div className="fade-in" style={{
+      position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",zIndex:10000,
+      background:"#1e293b",color:"#fff",
+      padding:"12px 18px",borderRadius:14,
+      display:"flex",alignItems:"center",gap:12,
+      boxShadow:"0 8px 32px rgba(0,0,0,.28)",
+      fontSize:13,fontWeight:500,minWidth:260,maxWidth:400
+    }}>
+      <span style={{flex:1}}>🗑️ {label} deleted</span>
+      <button onClick={()=>{onUndo();onClose();}} style={{
+        padding:"6px 16px",borderRadius:9,border:"none",
+        background:"#16a34a",color:"#fff",fontWeight:700,fontSize:12,
+        cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"
+      }}>↩ Undo</button>
+      <button onClick={onClose} style={{background:"none",border:"none",color:"rgba(255,255,255,.5)",cursor:"pointer",fontSize:18,lineHeight:1,padding:"0 2px"}}>×</button>
+    </div>
+  );
+}
+
 /* ─── Confirm Dialog ─── */
 function ConfirmDialog({title,body,onConfirm,onCancel}){
   return(
@@ -5366,13 +5415,18 @@ function DEntry({user,pigs,logs,setLogs,capital,setCapital}){
   const [done,setDone]=useState(false);
   const [confirm,setConfirm]=useState(false);
   const [toast,setToast]=useState(null);
+  const [tab,setTab]=useState("form");
   const closeToast=useCallback(()=>setToast(null),[]);
+
+  // My past submissions
+  const myLogs=logs.filter(l=>l.workerId===user.id).slice().reverse().slice(0,10);
+  const todayDone=logs.some(l=>l.workerId===user.id&&l.date===toDay());
+
   async function doSave(){
     setConfirm(false);
     const isAdmin=user.role==="admin";
     const newLog={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),approved:isAdmin?true:false};
     setLogs(p=>{const updated=[...p,newLog];fsSet("logs",updated);return updated;});
-    // Only deduct capital if admin-entered (approved)
     if(isAdmin&&setCapital&&form.deaths>0&&parseFloat(form.deathLossAmount)>0){
       capitalTx(capital,setCapital,{type:"expense",category:"Pig Death Loss",amount:parseFloat(form.deathLossAmount),description:`${form.deaths} pig(s) died — entered by ${user.name}`,date:toDay()});
     }
@@ -5382,11 +5436,60 @@ function DEntry({user,pigs,logs,setLogs,capital,setCapital}){
       setTimeout(()=>setDone(true),1600);
     }catch(e){setToast({type:"error",message:"Failed to save. Check internet and try again."});}
   }
-  if((!user||user.role!=="admin")&&(logs.some(l=>l.workerId===user.id&&l.date===toDay())||done))return(<div style={{textAlign:"center",padding:60}}><div style={{fontSize:48}}>✅</div><div style={{fontSize:19,fontWeight:700,color:C.accent,marginTop:14}}>Report submitted!</div><div style={{fontSize:13,color:C.faint,marginTop:6}}>Come back tomorrow.</div></div>);
+
+  if((!user||user.role!=="admin")&&(todayDone||done))return(<div style={{textAlign:"center",padding:60}}>
+    <div style={{fontSize:48}}>✅</div>
+    <div style={{fontSize:19,fontWeight:700,color:C.accent,marginTop:14}}>Report submitted!</div>
+    <div style={{fontSize:13,color:C.faint,marginTop:6}}>Come back tomorrow.</div>
+    {myLogs.length>0&&<div style={{marginTop:24,textAlign:"left",maxWidth:400,margin:"24px auto 0"}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:10}}>📋 My Recent Reports</div>
+      {myLogs.slice(0,5).map((l,i)=>(
+        <div key={i} style={{...S.card,padding:"10px 14px",marginBottom:8}}>
+          <div style={{display:"flex",justifyContent:"space-between"}}>
+            <span style={{fontWeight:600,fontSize:13}}>{l.date}</span>
+            <span style={{fontSize:11,padding:"2px 8px",borderRadius:20,background:l.approved===false?"rgba(245,158,11,.12)":"rgba(22,163,74,.1)",color:l.approved===false?C.amber:C.accent,fontWeight:700}}>{l.approved===false?"⏳ Pending":"✅ Approved"}</span>
+          </div>
+          <div style={{fontSize:11,color:C.faint,marginTop:4}}>Checked: {l.checked} · Sick: {l.sick} · Deaths: {l.deaths}</div>
+        </div>
+      ))}
+    </div>}
+  </div>);
+
   return(<div style={{maxWidth:490}}>
     {confirm&&<ConfirmDialog title="Submit Daily Report?" body={`Checked: ${form.checked} pigs · Sick: ${form.sick} · Deaths: ${form.deaths} · Births: ${form.births}${form.deaths>0&&form.deathLossAmount?" · Loss: RWF "+parseInt(form.deathLossAmount).toLocaleString():""}. Are you sure you want to submit this report for ${toDay()}?`} onConfirm={doSave} onCancel={()=>setConfirm(false)}/>}
     {toast&&<Toast message={toast.message} type={toast.type} onClose={closeToast}/>}
-    <div style={S.h1}>Daily Report — {toDay()}</div><div style={S.card}>
+
+    {/* Tabs */}
+    <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border}}>
+      {[["form","📝 Today's Report"],["history","📋 My Submissions"]].map(([t,l])=>(
+        <button key={t} style={S.tab(tab===t)} onClick={()=>setTab(t)}>{l}</button>
+      ))}
+    </div>
+
+    {tab==="history"&&(<div>
+      {myLogs.length===0&&<div style={{...S.card,color:C.faint,fontSize:13,textAlign:"center",padding:30}}>No submissions yet.</div>}
+      {myLogs.map((l,i)=>(
+        <div key={i} style={{...S.card,marginBottom:10,borderLeft:"3px solid "+(l.approved===false?C.amber:C.accent)}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+            <span style={{fontWeight:700,fontSize:13}}>{l.date}</span>
+            <span style={{fontSize:11,padding:"2px 8px",borderRadius:20,background:l.approved===false?"rgba(245,158,11,.12)":"rgba(22,163,74,.1)",color:l.approved===false?C.amber:C.accent,fontWeight:700}}>{l.approved===false?"⏳ Pending approval":"✅ Approved"}</span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:5,fontSize:11}}>
+            {[["Checked",l.checked],["Sick",l.sick],["Deaths",l.deaths],["Births",l.births],["Water",l.water?"✓":"✗"],["Cleaned",l.cleaned?"✓":"✗"]].map(([lbl,v])=>(
+              <div key={lbl} style={{background:C.elevated,borderRadius:5,padding:"4px 7px"}}>
+                <div style={{color:C.faint,fontSize:9}}>{lbl}</div>
+                <div style={{color:(lbl==="Sick"||lbl==="Deaths")&&v>0?C.red:C.text,marginTop:1}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          {l.notes&&<div style={{fontSize:11,color:C.faint,marginTop:6,fontStyle:"italic"}}>"{l.notes}"</div>}
+        </div>
+      ))}
+    </div>)}
+
+    {tab==="form"&&(<div>
+    <div style={S.h1}>📝 Daily Report — {toDay()}</div>
+    <div style={S.card}>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
       {[["checked","Pigs Checked"],["sick","Sick Pigs"],["deaths","Deaths"],["births","New Births"]].map(([k,l])=>(
         <div key={k}><label style={S.lbl}>{l}</label><input type="number" min="0" value={form[k]} onChange={e=>setForm({...form,[k]:parseInt(e.target.value)||0})} style={S.inp}/></div>
@@ -5395,15 +5498,16 @@ function DEntry({user,pigs,logs,setLogs,capital,setCapital}){
         <div key={k}><label style={S.lbl}>{l}</label><select value={form[k]?"yes":"no"} onChange={e=>setForm({...form,[k]:e.target.value==="yes"})} style={S.inp}><option value="yes">Yes ✓</option><option value="no">No ✗</option></select></div>
       ))}
     </div>
-    {/* Death loss amount */}
     {form.deaths>0&&<div style={{marginBottom:12,padding:"10px 13px",background:"rgba(239,68,68,.05)",border:"1px solid rgba(239,68,68,.2)",borderRadius:9}}>
       <label style={{...S.lbl,color:C.red}}>💀 Capital Loss from {form.deaths} Death(s) (RWF)</label>
       <input type="number" min="0" placeholder="Enter total loss amount in RWF" value={form.deathLossAmount} onChange={e=>setForm({...form,deathLossAmount:e.target.value})} style={S.inp}/>
-      <div style={{fontSize:10,color:C.faint,marginTop:4}}>This amount will be deducted from your business capital.</div>
+      <div style={{fontSize:10,color:C.faint,marginTop:4}}>This amount will be deducted from business capital.</div>
     </div>}
-    <div style={{marginBottom:12}}><label style={S.lbl}>Notes</label><textarea rows={3} value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="Any observations..." style={{...S.inp,resize:"vertical"}}/></div>
+    <div style={{marginBottom:12}}><label style={S.lbl}>Notes</label><textarea rows={3} value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="Any observations, sick pig details, unusual events…" style={{...S.inp,resize:"vertical"}}/></div>
     <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={()=>setConfirm(true)}>Submit Report →</button>
-  </div></div>);
+    {user.role!=="admin"&&<div style={{fontSize:11,color:C.muted,marginTop:8,textAlign:"center",padding:"7px",background:"rgba(245,158,11,.06)",borderRadius:6,border:"1px solid rgba(245,158,11,.2)"}}>⏳ Pending admin approval before it counts in records</div>}
+  </div></div>)}
+  </div>);
 }
 
 function FEntry({user,pigs,feeds,setFeeds,capital,setCapital}){
@@ -5531,7 +5635,22 @@ function FEntry({user,pigs,feeds,setFeeds,capital,setCapital}){
         💾 Save Feeding Log →
       </button>
       {(!form.kg||!form.costPerKg)&&<div style={{fontSize:11,color:C.faint,marginTop:7,textAlign:"center"}}>Enter kg and cost per kg to save</div>}
+      {user.role!=="admin"&&<div style={{fontSize:11,color:C.muted,marginTop:8,textAlign:"center",padding:"7px",background:"rgba(245,158,11,.06)",borderRadius:6,border:"1px solid rgba(245,158,11,.2)"}}>⏳ Pending admin approval before it counts in records</div>}
     </div>
+
+    {/* My recent feed logs */}
+    {feeds.filter(f=>f.workerId===user.id).length>0&&<div style={{marginTop:16}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:10}}>📋 My Recent Feed Logs</div>
+      {feeds.filter(f=>f.workerId===user.id).slice().reverse().slice(0,5).map((f,i)=>(
+        <div key={i} style={{...S.row,marginBottom:6,borderLeft:"3px solid "+(f.approved===false?C.amber:C.accent)}}>
+          <div>
+            <div style={{fontWeight:600,fontSize:12}}>{f.feedType} · {f.kg}kg</div>
+            <div style={{fontSize:10,color:C.faint}}>{f.date} · RWF {fmtNum(f.cost)}</div>
+          </div>
+          <span style={{fontSize:10,padding:"2px 7px",borderRadius:20,background:f.approved===false?"rgba(245,158,11,.12)":"rgba(22,163,74,.1)",color:f.approved===false?C.amber:C.accent,fontWeight:700}}>{f.approved===false?"⏳ Pending":"✅ Approved"}</span>
+        </div>
+      ))}
+    </div>}
   </div>);
 }
 
@@ -5542,12 +5661,35 @@ function SEntry({user,pigs,setPigs,sales,setSales,capital,setCapital}){
   const [toast,setToast]=useState(null);
   const closeToast=useCallback(()=>setToast(null),[]);
   const active=pigs.filter(p=>p.status==="active");
+
+  // Past buyers for suggestions
+  const pastBuyers=[...new Set((sales||[]).map(s=>s.buyer).filter(Boolean))].slice(0,8);
+  const [showBuyerSugg,setShowBuyerSugg]=useState(false);
+  const buyerSugg=pastBuyers.filter(b=>!form.buyer||b.toLowerCase().includes(form.buyer.toLowerCase()));
+
+  const selPig=active.find(p=>p.id===form.pigId);
+  const marketPriceHint=selPig?getMarketPrice(selPig.stage,selPig.weight):0;
+  const suggestedPriceKg=selPig&&selPig.weight>0?Math.round(marketPriceHint/selPig.weight):2500;
+
+  function selectPig(pigId){
+    const pig=active.find(p=>p.id===pigId);
+    if(pig){
+      const priceKg=String(suggestedPriceKg||2500);
+      const w=String(pig.weight||"");
+      const tot=pig.weight&&suggestedPriceKg?String(Math.round(pig.weight*suggestedPriceKg)):"";
+      setForm(f=>({...f,pigId,weight:w,priceKg,total:tot}));
+    } else {
+      setForm(f=>({...f,pigId,weight:"",priceKg:"",total:""}));
+    }
+  }
+
   function upd(f){
     const w=parseFloat(f.weight)||0;
     const p=parseFloat(f.priceKg)||0;
     if(w>0&&p>0) return {...f,total:String(Math.round(w*p))};
     return f;
   }
+
   async function doSave(){
     setConfirm(false);
     const isAdmin=user.role==="admin";
@@ -5555,35 +5697,95 @@ function SEntry({user,pigs,setPigs,sales,setSales,capital,setCapital}){
     const finalTotal=parseFloat(form.total)||calcTotal;
     const newSale={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:Math.round(finalTotal),approved:isAdmin?true:false};
     setSales(p=>{const updated=[...p,newSale];fsSet("sales",updated);return updated;});
-    // Only mark pig as sold and record capital if admin-approved immediately
     if(isAdmin){
       if(form.pigId) setPigs(p=>{const updated=p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig);fsSet("pigs",updated);return updated;});
       if(setCapital) capitalTx(capital,setCapital,{type:"income",category:"Pig Sale",amount:Math.round(finalTotal),description:`${selPig?selPig.tag+", ":""}${form.weight}kg @ RWF ${form.priceKg}/kg to ${form.buyer||"buyer"}`,date:toDay()});
     }
     try{
       await jbinAppend("sales",newSale);
-      setToast({type:"success",message:isAdmin?`Sale of RWF ${Math.round(newSale.total).toLocaleString()} recorded!`:"✅ Sale submitted! Awaiting admin approval."});
+      setToast({type:"success",message:isAdmin?`Sale of ${fmtRWF(Math.round(newSale.total))} recorded!`:"✅ Sale submitted! Awaiting admin approval."});
       setSaved(true);
       setTimeout(()=>{setSaved(false);setForm({pigId:"",buyer:"",weight:"",priceKg:"",total:"",notes:""});},2000);
     }catch(e){setToast({type:"error",message:"Failed to save. Check internet and try again."});}
   }
+
   function trySubmit(){if(!form.total)return;setConfirm(true);}
-  const selPig=active.find(p=>p.id===form.pigId);
+
   return(<div style={{maxWidth:490}}>
     {confirm&&<ConfirmDialog title="Record This Sale?" body={`${selPig?selPig.tag+" · ":""}Buyer: ${form.buyer||"—"} · ${form.weight}kg @ RWF ${parseInt(form.priceKg||0).toLocaleString()}/kg = RWF ${parseInt(form.total||0).toLocaleString()}. This will mark the pig as sold. Confirm?`} onConfirm={doSave} onCancel={()=>setConfirm(false)}/>}
     {toast&&<Toast message={toast.message} type={toast.type} onClose={closeToast}/>}
-    <div style={S.h1}>Log a Sale</div>
+    <div style={S.h1}>🏷️ Log a Sale</div>
+    <div style={S.sub}>Record pig sale — submitted for admin approval</div>
     {saved&&<div style={{padding:10,background:C.accentSoft,borderRadius:7,marginBottom:12,color:C.accent,fontSize:13}}>✓ Sale recorded!</div>}
     <div style={S.card}>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-        <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Pig Sold</label><select value={form.pigId} onChange={e=>setForm({...form,pigId:e.target.value})} style={S.inp}><option value="">Select pig</option>{active.map(p=><option key={p.id} value={p.id}>{p.tag} — {p.stage}</option>)}</select></div>
-        <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Buyer</label><input placeholder="Buyer name" value={form.buyer} onChange={e=>setForm({...form,buyer:e.target.value})} style={S.inp}/></div>
-        <div><label style={S.lbl}>Weight (kg)</label><input type="number" placeholder="80" value={form.weight} onChange={e=>setForm(upd({...form,weight:e.target.value}))} style={S.inp}/></div>
-        <div><label style={S.lbl}>Price/kg (RWF)</label><input type="number" placeholder="2500" value={form.priceKg} onChange={e=>setForm(upd({...form,priceKg:e.target.value}))} style={S.inp}/></div>
-        <div style={{gridColumn:"1/-1"}}><label style={S.lbl}>Total (RWF)</label><input type="number" placeholder="Auto-calculated" value={form.total} onChange={e=>setForm({...form,total:e.target.value})} style={S.inp}/></div>
+      {/* Pig selector with market hint */}
+      <div style={{marginBottom:12}}>
+        <label style={S.lbl}>Pig Sold *</label>
+        <select value={form.pigId} onChange={e=>selectPig(e.target.value)} style={S.inp}>
+          <option value="">Select pig…</option>
+          {active.map(p=><option key={p.id} value={p.id}>{p.tag} — {p.stage} · {p.weight}kg · est. {fmtRWF(getMarketPrice(p.stage,p.weight))}</option>)}
+        </select>
+        {selPig&&<div style={{fontSize:11,color:C.accent,marginTop:4,padding:"5px 9px",background:C.accentSoft,borderRadius:6}}>
+          ✅ {selPig.tag} · {selPig.breed} · {selPig.weight}kg · Market est: <strong>{fmtRWF(marketPriceHint)}</strong> (~{fmtRWF(suggestedPriceKg)}/kg)
+        </div>}
       </div>
-      <div style={{marginBottom:12}}><label style={S.lbl}>Notes</label><input placeholder="Notes..." value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} style={S.inp}/></div>
-      <button style={{...S.btn(),width:"100%",padding:12,fontSize:14}} onClick={trySubmit}>Record Sale →</button>
+
+      {/* Buyer with suggestions */}
+      <div style={{marginBottom:12,position:"relative"}}>
+        <label style={S.lbl}>Buyer Name *</label>
+        <input placeholder="Type buyer name…" value={form.buyer}
+          onChange={e=>{setForm({...form,buyer:e.target.value});setShowBuyerSugg(true);}}
+          onFocus={()=>setShowBuyerSugg(true)}
+          onBlur={()=>setTimeout(()=>setShowBuyerSugg(false),180)}
+          style={S.inp}/>
+        {showBuyerSugg&&buyerSugg.length>0&&(
+          <div style={{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:"1px solid "+C.border,borderRadius:8,zIndex:999,boxShadow:"0 4px 16px rgba(0,0,0,.1)"}}>
+            {buyerSugg.map(b=>(
+              <div key={b} onMouseDown={()=>{setForm(f=>({...f,buyer:b}));setShowBuyerSugg(false);}}
+                style={{padding:"9px 14px",cursor:"pointer",fontSize:13,color:C.text,borderBottom:"1px solid "+C.elevated}}
+                onMouseEnter={e=>e.currentTarget.style.background=C.accentSoft}
+                onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                👤 {b}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        <div>
+          <label style={S.lbl}>Weight (kg) *</label>
+          <input type="number" placeholder={selPig?String(selPig.weight):"80"} value={form.weight}
+            onChange={e=>setForm(upd({...form,weight:e.target.value}))} style={S.inp}/>
+          {selPig&&form.weight&&Math.abs(parseFloat(form.weight)-selPig.weight)>10&&(
+            <div style={{fontSize:10,color:C.amber,marginTop:3}}>⚠️ Different from recorded weight ({selPig.weight}kg)</div>
+          )}
+        </div>
+        <div>
+          <label style={S.lbl}>Price per kg (RWF) *</label>
+          <input type="number" placeholder={String(suggestedPriceKg||2500)} value={form.priceKg}
+            onChange={e=>setForm(upd({...form,priceKg:e.target.value}))} style={S.inp}/>
+          {suggestedPriceKg>0&&<div style={{fontSize:10,color:C.muted,marginTop:3}}>Market ref: ~{fmtRWF(suggestedPriceKg)}/kg</div>}
+        </div>
+        <div style={{gridColumn:"1/-1"}}>
+          <label style={S.lbl}>Total (RWF) — auto-calculated</label>
+          <input type="number" placeholder="Auto-calculated" value={form.total}
+            onChange={e=>setForm({...form,total:e.target.value})} style={{...S.inp,fontWeight:700,fontSize:15,color:C.accent}}/>
+          {form.weight&&form.priceKg&&<div style={{fontSize:11,color:C.accent,marginTop:3,fontWeight:600}}>
+            {parseFloat(form.weight).toFixed(1)}kg × {fmtRWF(parseFloat(form.priceKg))} = <strong>{fmtRWF(Math.round(parseFloat(form.weight)*parseFloat(form.priceKg)))}</strong>
+          </div>}
+        </div>
+      </div>
+
+      <div style={{marginBottom:12}}>
+        <label style={S.lbl}>Notes (optional)</label>
+        <input placeholder="e.g. cash paid, market name…" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} style={S.inp}/>
+      </div>
+
+      <button style={{...S.btn(),width:"100%",padding:12,fontSize:14,opacity:!form.total?0.5:1}} disabled={!form.total} onClick={trySubmit}>
+        💰 Record Sale →
+      </button>
+      {user.role!=="admin"&&<div style={{fontSize:11,color:C.muted,marginTop:8,textAlign:"center",padding:"7px",background:"rgba(245,158,11,.06)",borderRadius:6,border:"1px solid rgba(245,158,11,.2)"}}>⏳ Pending admin approval before pig is marked sold</div>}
     </div>
   </div>);
 }
@@ -5591,59 +5793,70 @@ function SEntry({user,pigs,setPigs,sales,setSales,capital,setCapital}){
 
 function BEntry({user,expenses,setExpenses,capital,setCapital}){
   const PURCHASE_CATS=["Feed Purchase","Medicine","Veterinary","Equipment","Transport","Labour","Utilities","Maintenance","Pig Purchase","Other"];
+  // Pre-defined item suggestions per category
+  const CAT_ITEMS={
+    "Feed Purchase":["Maize bran","Soya meal","Pellets","Wheat bran","Kitchen waste","Cassava peels","Mixed feed","Fish meal","Cotton seed cake","Brewery waste"],
+    "Medicine":["Ivermectin","ORS sachets","Multivitamins","Antibiotics","Dewormer","Electrolytes","Wound spray","Disinfectant (Dettol)","Acaricide","Iron injection"],
+    "Veterinary":["Vet consultation fee","Vet call-out fee","Lab test fee","Diagnosis fee","Treatment fee"],
+    "Equipment":["Feeding trough","Water nipples","Weighing scale","Wheelbarrow","Shovels","Hoe","Buckets","Spray pump","Feeders","Water tank"],
+    "Transport":["Truck hire","Motorbike fee","Bus transport","Fuel","Loading fee"],
+    "Labour":["Daily wages","Weekly wages","Cleaning labour","Construction labour","Loading/offloading"],
+    "Utilities":["Electricity bill","Water bill","Phone airtime","Internet data"],
+    "Maintenance":["Pen repair","Roof repair","Fence repair","Painting","Plumbing","Welding"],
+    "Pig Purchase":["Weaner pig","Grower pig","Sow","Boar","Gilt","Piglet"],
+    "Other":["Office supplies","Signage","Printing","Other expense"]
+  };
+  const UNIT_OPTIONS=["kg","litres","doses","pcs","bags","boxes","heads"];
   const [form,setForm]=useState({category:"Feed Purchase",item:"",quantity:"",unit:"kg",unitPrice:"",totalAmount:"",supplier:"",date:toDay(),notes:""});
-  const [confirm,setConfirm]=useState(false);
   const [saved,setSaved]=useState(false);
+  const [confirm,setConfirm]=useState(false);
   const [toast,setToast]=useState(null);
   const closeToast=useCallback(()=>setToast(null),[]);
+  const [showItemSuggestions,setShowItemSuggestions]=useState(false);
 
-  const qty=parseFloat(form.quantity)||0;
-  const unitPrice=parseFloat(form.unitPrice)||0;
-  const _manualTotal=parseFloat(form.totalAmount)||0;
-  const total=_manualTotal>0?_manualTotal:qty>0&&unitPrice>0?Math.round(qty*unitPrice):0;
+  // Past suppliers from expenses history
+  const pastSuppliers=[...new Set((expenses||[]).map(e=>e.supplier).filter(Boolean))].slice(0,8);
 
   function updateCalc(f){
     const q=parseFloat(f.quantity)||0;
-    const u=parseFloat(f.unitPrice)||0;
-    if(q>0&&u>0) return {...f,totalAmount:String(Math.round(q*u))};
+    const up=parseFloat(f.unitPrice)||0;
+    if(q>0&&up>0) return{...f,totalAmount:String(Math.round(q*up))};
     return f;
   }
+  function updateCat(cat){
+    // Auto-set unit when category changes
+    const unitMap={"Feed Purchase":"kg","Medicine":"doses","Equipment":"pcs","Labour":"pcs","Pig Purchase":"heads"};
+    setForm(f=>({...f,category:cat,item:"",unit:unitMap[cat]||f.unit}));
+    setShowItemSuggestions(false);
+  }
 
-  function doSave(){
+  const total=parseFloat(form.totalAmount)||0;
+  const suggestions=(CAT_ITEMS[form.category]||[]).filter(s=>!form.item||s.toLowerCase().includes(form.item.toLowerCase()));
+
+  async function doSave(){
     setConfirm(false);
-    if(!total||total<=0) return;
     const isAdmin=user.role==="admin";
     const newExp={
-      id:uid(),
-      date:form.date,
-      category:form.category,
-      amount:total,
-      description:`${form.item||form.category}${form.quantity?" — "+form.quantity+" "+form.unit:""}${form.supplier?" from "+form.supplier:""}`,
-      worker:user.name,
-      workerId:user.id,
-      item:form.item,
-      quantity:form.quantity,
-      unit:form.unit,
-      unitPrice:form.unitPrice,
-      supplier:form.supplier,
-      notes:form.notes,
+      id:uid(),workerId:user.id,worker:user.name,
+      category:form.category,item:form.item||form.category,
+      quantity:form.quantity,unit:form.unit,unitPrice:form.unitPrice,
+      amount:total,supplier:form.supplier,
+      description:`${form.item||form.category}${form.quantity?" — "+form.quantity+" "+(form.unit||""):""}${form.supplier?" from "+form.supplier:""}`,
+      notes:form.notes,date:form.date,
       source:"worker_purchase",
       approved:isAdmin?true:false
     };
     setExpenses(p=>{const updated=[...p,newExp];fsSet("expenses",updated);return updated;});
-    if(isAdmin&&setCapital) capitalTx(capital,setCapital,{
-      type:"expense",
-      category:form.category,
-      amount:total,
-      description:`${form.item||form.category}${form.quantity?" "+form.quantity+" "+form.unit:""}${form.supplier?" from "+form.supplier:""} — by ${user.name}`,
-      date:form.date
-    });
-    setToast({type:"success",message:isAdmin?`✅ Purchase of ${fmtRWF(total)} recorded!`:`✅ Purchase submitted! Awaiting admin approval.`});
-    setSaved(true);
-    setTimeout(()=>{
-      setSaved(false);
-      setForm({category:"Feed Purchase",item:"",quantity:"",unit:"kg",unitPrice:"",totalAmount:"",supplier:"",date:toDay(),notes:""});
-    },2200);
+    if(isAdmin&&setCapital) capitalTx(capital,setCapital,{type:"expense",category:form.category,amount:total,description:newExp.description,date:form.date});
+    try{
+      await jbinAppend("expenses",newExp);
+      setToast({type:"success",message:isAdmin?`✅ Purchase of ${fmtRWF(total)} recorded!`:`✅ Purchase submitted! Awaiting admin approval.`});
+      setSaved(true);
+      setTimeout(()=>{
+        setSaved(false);
+        setForm({category:"Feed Purchase",item:"",quantity:"",unit:"kg",unitPrice:"",totalAmount:"",supplier:"",date:toDay(),notes:""});
+      },2200);
+    }catch(e){setToast({type:"error",message:"Failed to save. Check internet and try again."});}
   }
 
   function trySubmit(){
@@ -5658,24 +5871,50 @@ function BEntry({user,expenses,setExpenses,capital,setCapital}){
       onConfirm={doSave} onCancel={()=>setConfirm(false)}/>}
     {toast&&<Toast message={toast.message} type={toast.type} onClose={closeToast}/>}
     <div style={S.h1}>🛒 Log Purchase</div>
-    <div style={S.sub}>Record what you bought — automatically logged as a farm expense</div>
+    <div style={S.sub}>Record what you bought — submitted for admin approval</div>
     {saved&&<div style={{padding:10,background:C.accentSoft,borderRadius:7,marginBottom:12,color:C.accent,fontSize:13}}>✓ Purchase recorded!</div>}
     <div style={S.card}>
+      {/* Category first */}
+      <div style={{marginBottom:12}}>
+        <label style={S.lbl}>Category *</label>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+          {PURCHASE_CATS.map(c=>(
+            <button key={c} onClick={()=>updateCat(c)} style={{
+              padding:"6px 12px",borderRadius:20,border:"1.5px solid "+(form.category===c?C.accent:C.border),
+              background:form.category===c?C.accent:"transparent",
+              color:form.category===c?"#fff":C.muted,
+              fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:form.category===c?700:400,
+              transition:"all .15s"
+            }}>{c}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Item with suggestions */}
+      <div style={{marginBottom:12,position:"relative"}}>
+        <label style={S.lbl}>What did you buy? *</label>
+        <input
+          placeholder={`e.g. ${(CAT_ITEMS[form.category]||[])[0]||"Type item name"}…`}
+          value={form.item}
+          onChange={e=>{setForm({...form,item:e.target.value});setShowItemSuggestions(true);}}
+          onFocus={()=>setShowItemSuggestions(true)}
+          onBlur={()=>setTimeout(()=>setShowItemSuggestions(false),180)}
+          style={S.inp}/>
+        {showItemSuggestions&&suggestions.length>0&&(
+          <div style={{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:"1px solid "+C.border,borderRadius:8,zIndex:999,boxShadow:"0 4px 16px rgba(0,0,0,.1)",maxHeight:180,overflowY:"auto"}}>
+            {suggestions.map(s=>(
+              <div key={s} onMouseDown={()=>{setForm(f=>({...f,item:s}));setShowItemSuggestions(false);}}
+                style={{padding:"9px 14px",cursor:"pointer",fontSize:13,color:C.text,borderBottom:"1px solid "+C.elevated}}
+                onMouseEnter={e=>e.currentTarget.style.background=C.accentSoft}
+                onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                {s}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-        <div style={{gridColumn:"1/-1"}}>
-          <label style={S.lbl}>What did you buy? *</label>
-          <input placeholder="e.g. Maize bran, Ivermectin, Buckets…" value={form.item} onChange={e=>setForm({...form,item:e.target.value})} style={S.inp}/>
-        </div>
-        <div>
-          <label style={S.lbl}>Category</label>
-          <select value={form.category} onChange={e=>setForm({...form,category:e.target.value})} style={S.inp}>
-            {PURCHASE_CATS.map(c=><option key={c}>{c}</option>)}
-          </select>
-        </div>
-        <div>
-          <label style={S.lbl}>Date</label>
-          <input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} style={S.inp}/>
-        </div>
         <div>
           <label style={S.lbl}>Quantity</label>
           <input type="number" min="0" placeholder="e.g. 50" value={form.quantity} onChange={e=>setForm(updateCalc({...form,quantity:e.target.value}))} style={S.inp}/>
@@ -5683,7 +5922,7 @@ function BEntry({user,expenses,setExpenses,capital,setCapital}){
         <div>
           <label style={S.lbl}>Unit</label>
           <select value={form.unit} onChange={e=>setForm({...form,unit:e.target.value})} style={S.inp}>
-            {["kg","litres","doses","pcs","bags","boxes","heads"].map(u=><option key={u}>{u}</option>)}
+            {UNIT_OPTIONS.map(u=><option key={u}>{u}</option>)}
           </select>
         </div>
         <div>
@@ -5692,16 +5931,30 @@ function BEntry({user,expenses,setExpenses,capital,setCapital}){
         </div>
         <div>
           <label style={S.lbl}>Total Amount (RWF) *</label>
-          <input type="number" min="0" placeholder="Auto-calculated" value={form.totalAmount} onChange={e=>setForm({...form,totalAmount:e.target.value})} style={S.inp}/>
+          <input type="number" min="0" placeholder="Auto-calculated or type" value={form.totalAmount} onChange={e=>setForm({...form,totalAmount:e.target.value})} style={S.inp}/>
         </div>
-        <div style={{gridColumn:"1/-1"}}>
-          <label style={S.lbl}>Supplier / Where bought</label>
-          <input placeholder="e.g. Kimironko Market, Nyabugogo agrovets…" value={form.supplier} onChange={e=>setForm({...form,supplier:e.target.value})} style={S.inp}/>
+        <div>
+          <label style={S.lbl}>Date</label>
+          <input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} style={S.inp}/>
         </div>
-        <div style={{gridColumn:"1/-1"}}>
-          <label style={S.lbl}>Notes</label>
-          <input placeholder="Any additional details…" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} style={S.inp}/>
+        <div>
+          <label style={S.lbl}>Supplier / Market</label>
+          {pastSuppliers.length>0?(
+            <select value={form.supplier} onChange={e=>setForm({...form,supplier:e.target.value})} style={S.inp}>
+              <option value="">Select or type…</option>
+              {pastSuppliers.map(s=><option key={s}>{s}</option>)}
+              <option value="__new__">+ Other (type below)</option>
+            </select>
+          ):(
+            <input placeholder="e.g. Kimironko Market…" value={form.supplier} onChange={e=>setForm({...form,supplier:e.target.value})} style={S.inp}/>
+          )}
+          {form.supplier==="__new__"&&<input placeholder="Type supplier name…" style={{...S.inp,marginTop:6}} value="" onChange={e=>setForm({...form,supplier:e.target.value})}/>}
         </div>
+      </div>
+
+      <div style={{marginBottom:12}}>
+        <label style={S.lbl}>Notes (optional)</label>
+        <input placeholder="Any additional details…" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} style={S.inp}/>
       </div>
 
       {total>0&&<div style={{padding:"10px 14px",background:"rgba(239,68,68,.06)",border:"1px solid rgba(239,68,68,.2)",borderRadius:9,marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
@@ -5715,7 +5968,8 @@ function BEntry({user,expenses,setExpenses,capital,setCapital}){
         onClick={trySubmit}>
         🛒 Save Purchase →
       </button>
-      {(!total||total<=0)&&<div style={{fontSize:11,color:C.faint,marginTop:7,textAlign:"center"}}>Enter a total amount to save</div>}
+      {(!total||total<=0)&&<div style={{fontSize:11,color:C.faint,marginTop:7,textAlign:"center"}}>Enter quantity × unit price, or type total amount directly</div>}
+      {user.role!=="admin"&&<div style={{fontSize:11,color:C.muted,marginTop:8,textAlign:"center",padding:"7px",background:"rgba(245,158,11,.06)",borderRadius:6,border:"1px solid rgba(245,158,11,.2)"}}>⏳ Pending admin approval before it counts in records</div>}
     </div>
   </div>);
 }
@@ -5725,7 +5979,7 @@ function BEntry({user,expenses,setExpenses,capital,setCapital}){
    Full CRUD on worker-submitted feeds, logs, sales, expenses
    Every edit/delete cascades to capital & P&L automatically
 ═══════════════════════════════════════════════════ */
-function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expenses,setExpenses,incomes,capital,setCapital,pigs,users}){
+function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expenses,setExpenses,incomes,capital,setCapital,pigs,users,pushUndo}){
   const [tab,setTab]=useState("feeds");
   const [editId,setEditId]=useState(null);
   const [editForm,setEditForm]=useState(null);
@@ -5789,11 +6043,15 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
   }
   function deleteFeed(id){
     if(!window.confirm("Delete this feed log? Capital will be adjusted."))return;
+    const deleted=feeds.find(x=>x.id===id);
     const updated=feeds.filter(x=>x.id!==id);
     setFeeds(updated);fsSet("feeds",updated);
-    // Purge all orphaned capital transactions using the new feeds list
     purgeOrphanedCapitalTx(capital,setCapital,updated,sales,expenses,logs);
     showToast("🗑️ Feed log deleted — capital adjusted");
+    if(pushUndo&&deleted) pushUndo("Feed log ("+deleted.feedType+" "+deleted.kg+"kg)",()=>{
+      const restored=[...feeds.filter(x=>x.id!==deleted.id),deleted];
+      setFeeds(restored);fsSet("feeds",restored);
+    });
   }
 
   // ── LOGS ──
@@ -5816,10 +6074,15 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
   }
   function deleteLog(id){
     if(!window.confirm("Delete this daily log?"))return;
+    const deleted=logs.find(x=>x.id===id);
     const updated=logs.filter(x=>x.id!==id);
     setLogs(updated);fsSet("logs",updated);
     purgeOrphanedCapitalTx(capital,setCapital,feeds,sales,expenses,updated);
     showToast("🗑️ Daily log deleted");
+    if(pushUndo&&deleted) pushUndo("Daily log ("+deleted.worker+" "+deleted.date+")",()=>{
+      const restored=[...logs.filter(x=>x.id!==deleted.id),deleted];
+      setLogs(restored);fsSet("logs",restored);
+    });
   }
 
   // ── SALES ──
@@ -5841,10 +6104,15 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
   }
   function deleteSale(id){
     if(!window.confirm("Delete this sale? Capital income will be reversed."))return;
+    const deleted=sales.find(x=>x.id===id);
     const updated=sales.filter(x=>x.id!==id);
     setSales(updated);fsSet("sales",updated);
     purgeOrphanedCapitalTx(capital,setCapital,feeds,updated,expenses,logs);
     showToast("🗑️ Sale deleted — capital reversed");
+    if(pushUndo&&deleted) pushUndo("Sale ("+fmtRWF(deleted.total)+" — "+deleted.worker+")",()=>{
+      const restored=[...sales.filter(x=>x.id!==deleted.id),deleted];
+      setSales(restored);fsSet("sales",restored);
+    });
   }
 
   // ── EXPENSES ──
@@ -5874,10 +6142,15 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
   }
   function deleteExpense(id){
     if(!window.confirm("Delete this expense? Capital will be adjusted."))return;
+    const deleted=expenses.find(x=>x.id===id);
     const updated=expenses.filter(x=>x.id!==id);
     setExpenses(updated);fsSet("expenses",updated);
     purgeOrphanedCapitalTx(capital,setCapital,feeds,sales,updated,logs);
     showToast("🗑️ Expense deleted — capital adjusted");
+    if(pushUndo&&deleted) pushUndo("Purchase ("+fmtRWF(deleted.amount)+" — "+(deleted.item||deleted.category)+")",()=>{
+      const restored=[...expenses.filter(x=>x.id!==deleted.id),deleted];
+      setExpenses(restored);fsSet("expenses",restored);
+    });
   }
 
   const TABS=[{id:"feeds",l:"🌾 Feeds",count:feeds.length},{id:"logs",l:"📋 Daily Logs",count:logs.length},{id:"sales",l:"🏷️ Sales",count:sales.length},{id:"expenses",l:"🛒 Purchases",count:expenses.length}];
