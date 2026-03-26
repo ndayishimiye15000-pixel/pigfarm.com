@@ -2188,7 +2188,7 @@ function App(){
     }).catch(()=>{setUsers([...INIT_USERS]);setUsersLoaded(true);});
 
     // Load all farm data once
-    getOnlineFarmData().then(data=>{
+    getOnlineFarmData().then(async(data)=>{
       applyFarmData({...data, __loadCapital:true});
       dataLoaded.current=true;
       setPigsLoaded(true);setFeedsLoaded(true);setSalesLoaded(true);
@@ -2196,15 +2196,24 @@ function App(){
       setMessagesLoaded(true);setReproLoaded(true);setStockLoaded(true);
       setCapitalLoaded(true);setSessionsLoaded(true);
 
-      // ── IMMEDIATE CAPITAL CLEANUP ──
-      // Strip all refId-linked transactions from JSONBin right now.
-      // This fixes any existing bad/orphaned data in JSONBin permanently.
-      if(data&&data.capital){
-        const cleanTxs=(data.capital.transactions||[]).filter(t=>!t.refId);
-        const cleanedCapital={...data.capital, transactions:cleanTxs};
-        // Push clean capital to JSONBin immediately so bad data is overwritten
-        setOnlineFarmData({capital:cleanedCapital});
-      }
+      // ── BULLETPROOF CAPITAL WIPE ──
+      // Directly PUT to JSONBin with ALL orphaned transactions stripped.
+      // This overwrites whatever bad data is stored there right now.
+      try{
+        const freshAll=await _doGetFarm()||{};
+        const oldTxs=(freshAll.capital&&freshAll.capital.transactions)||[];
+        const cleanTxs=oldTxs.filter(t=>!t.refId);
+        const wipedCapital={...(freshAll.capital||{initial:0}), transactions:cleanTxs};
+        // Force full PUT directly to JSONBin URL — bypasses all caches
+        await fetch(JBIN_FARM_URL,{
+          method:"PUT",
+          headers:{"Content-Type":"application/json","X-Master-Key":JBIN_KEY},
+          body:JSON.stringify({...freshAll, capital:wipedCapital, _capitalFixed:true, updatedAt:new Date().toISOString()})
+        });
+        // Update local cache too
+        _latestFarmData={...(_latestFarmData||{}), capital:wipedCapital};
+        setCapital(prev=>({...prev, transactions:cleanTxs}));
+      }catch(e){console.error("capital wipe error",e);}
     }).catch(e=>{
       console.error("initial farm load error",e);
       dataLoaded.current=true;
@@ -3902,11 +3911,26 @@ function AHome({pigs,feeds,sales,logs,users,expenses,incomes,reproductions,stock
   const [showCapitalSet,setShowCapitalSet]=useState(false);
   const [newInitial,setNewInitial]=useState("");
   const [fixDone,setFixDone]=useState(false);
+  const [fixing,setFixing]=useState(false);
 
-  function fixCapital(){
-    purgeOrphanedCapitalTx(capital,setCapital,feeds,sales,expenses,logs);
-    setFixDone(true);
-    setTimeout(()=>setFixDone(false),4000);
+  async function fixCapital(){
+    setFixing(true);
+    try{
+      // Step 1: wipe local state immediately
+      setCapital(prev=>({...prev, transactions:[]}));
+      // Step 2: directly PUT clean capital to JSONBin — no cache, no queue
+      const freshAll=await _doGetFarm()||{};
+      const cleanedCapital={...(freshAll.capital||{initial:0}), transactions:[], _wiped:true};
+      await fetch(JBIN_FARM_URL,{
+        method:"PUT",
+        headers:{"Content-Type":"application/json","X-Master-Key":JBIN_KEY},
+        body:JSON.stringify({...freshAll, capital:cleanedCapital, updatedAt:new Date().toISOString()})
+      });
+      _latestFarmData={...(_latestFarmData||{}), capital:cleanedCapital};
+      setFixDone(true);
+      setTimeout(()=>setFixDone(false),5000);
+    }catch(e){alert("Fix failed: "+e.message);}
+    setFixing(false);
   }
   return(<div>
     <div style={S.h1}>📊 Farm Overview</div>
@@ -3922,10 +3946,29 @@ function AHome({pigs,feeds,sales,logs,users,expenses,incomes,reproductions,stock
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         <button onClick={()=>{setShowCapitalSet(!showCapitalSet);setNewInitial(String(capital.initial||""));}} style={{padding:"8px 14px",borderRadius:9,border:"1px solid rgba(74,222,128,.35)",background:"rgba(74,222,128,.1)",color:"#4ade80",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>⚙️ Set Capital</button>
         <button onClick={()=>setPage("capital")} style={{padding:"8px 14px",borderRadius:9,border:"1px solid rgba(74,222,128,.35)",background:"rgba(74,222,128,.1)",color:"#4ade80",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>📋 View All</button>
-        <button onClick={fixCapital} style={{padding:"8px 14px",borderRadius:9,border:"1px solid rgba(239,68,68,.4)",background:"rgba(239,68,68,.1)",color:"#f87171",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🔧 Fix Balance</button>
+        <button onClick={fixCapital} disabled={fixing} style={{padding:"8px 14px",borderRadius:9,border:"1px solid rgba(239,68,68,.4)",background:"rgba(239,68,68,.15)",color:"#f87171",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>
+          {fixing?"⏳ Fixing...":"🔧 Fix Balance"}
+        </button>
       </div>
     </div>
-    {fixDone&&<div style={{padding:"10px 14px",background:"rgba(22,163,74,.1)",border:"1px solid rgba(22,163,74,.3)",borderRadius:9,marginBottom:10,fontSize:13,color:C.accent,fontWeight:600}}>✅ Capital balance fixed! Orphaned entries removed. Balance now matches actual records.</div>}
+
+    {/* Emergency alert — shows when balance doesn't match income-expenses */}
+    {(capitalBalance<0&&totalExp===0&&totalInc>0)||(Math.abs(capitalBalance-(capital.initial+totalInc-totalExp))>1000)?(
+      <div style={{padding:"14px 16px",background:"rgba(239,68,68,.1)",border:"2px solid rgba(239,68,68,.4)",borderRadius:12,marginBottom:12,animation:"pulse 2s ease-in-out infinite"}}>
+        <div style={{fontWeight:700,color:"#f87171",fontSize:14,marginBottom:6}}>⚠️ Capital Balance Mismatch Detected</div>
+        <div style={{fontSize:12,color:"#fca5a5",marginBottom:10}}>
+          Expected: <strong>{fmtRWF(capital.initial+totalInc-totalExp)}</strong> &nbsp;|&nbsp; Showing: <strong>{fmtRWF(capitalBalance)}</strong><br/>
+          Old deleted data is still affecting the balance. Click below to fix it permanently.
+        </div>
+        <button onClick={fixCapital} disabled={fixing} style={{padding:"10px 20px",borderRadius:9,border:"none",background:"#dc2626",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%"}}>
+          {fixing?"⏳ Fixing & Syncing to Server...":"🔧 FIX CAPITAL BALANCE NOW →"}
+        </button>
+      </div>
+    ):null}
+
+    {fixDone&&<div style={{padding:"12px 16px",background:"rgba(22,163,74,.12)",border:"1px solid rgba(22,163,74,.4)",borderRadius:10,marginBottom:12,fontSize:13,color:"#4ade80",fontWeight:700}}>
+      ✅ Capital fixed! Transactions wiped from server. Balance now: {fmtRWF(capital.initial+totalInc-totalExp)}
+    </div>}
     {showCapitalSet&&<div style={{...S.card,marginBottom:12,border:"1px solid rgba(74,222,128,.3)"}}>
       <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:10}}>Set Initial Capital</div>
       <div style={{display:"flex",gap:9}}>
