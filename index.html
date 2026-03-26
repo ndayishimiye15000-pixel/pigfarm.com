@@ -2138,7 +2138,7 @@ function App(){
         const workers=freshUsers.filter(u=>u.role!=="admin");
         setUsers([...INIT_USERS,...workers]);
       }
-      if(freshFarm) applyFarmData(freshFarm);
+      if(freshFarm) applyFarmData({...freshFarm, __loadCapital:true});
       setLastRefresh(new Date().toLocaleTimeString());
     }catch(e){console.error("refresh error",e);}
     setGlobalRefreshing(false);
@@ -2165,9 +2165,9 @@ function App(){
     if(Array.isArray(data.tasks))        setTasks(data.tasks);
     if(Array.isArray(data.vaccinations)) setVaccinations(data.vaccinations);
     if(Array.isArray(data.sessions))   setSessions(data.sessions);
-    if(data.capital&&typeof data.capital==="object"){
-      // Strip ALL refId-linked transactions on load — balance is derived from actual arrays.
-      // Only keep truly manual entries (no refId) like capital injections.
+    // Capital: only load if explicitly present AND strip all refId transactions
+    // refId transactions are orphan-prone — balance is derived from actual arrays
+    if(data.capital&&typeof data.capital==="object"&&data.__loadCapital===true){
       const cleanTxs=(data.capital.transactions||[]).filter(t=>!t.refId);
       setCapital({...data.capital, transactions:cleanTxs});
     }
@@ -2189,13 +2189,22 @@ function App(){
 
     // Load all farm data once
     getOnlineFarmData().then(data=>{
-      applyFarmData(data);
+      applyFarmData({...data, __loadCapital:true});
       dataLoaded.current=true;
-      // Mark all as loaded
       setPigsLoaded(true);setFeedsLoaded(true);setSalesLoaded(true);
       setLogsLoaded(true);setExpensesLoaded(true);setIncomesLoaded(true);
       setMessagesLoaded(true);setReproLoaded(true);setStockLoaded(true);
       setCapitalLoaded(true);setSessionsLoaded(true);
+
+      // ── IMMEDIATE CAPITAL CLEANUP ──
+      // Strip all refId-linked transactions from JSONBin right now.
+      // This fixes any existing bad/orphaned data in JSONBin permanently.
+      if(data&&data.capital){
+        const cleanTxs=(data.capital.transactions||[]).filter(t=>!t.refId);
+        const cleanedCapital={...data.capital, transactions:cleanTxs};
+        // Push clean capital to JSONBin immediately so bad data is overwritten
+        setOnlineFarmData({capital:cleanedCapital});
+      }
     }).catch(e=>{
       console.error("initial farm load error",e);
       dataLoaded.current=true;
@@ -2223,9 +2232,11 @@ function App(){
     const pollFarm=setInterval(async()=>{
       try{
         const serverData=await _doGetFarm();
-        // Merge server data with local in-memory cache so pending writes win
-        const merged=serverData?{...serverData,...(_latestFarmData||{})}:_latestFarmData;
-        if(merged) applyFarmData(merged);
+        if(!serverData) return;
+        // Poll updates everything EXCEPT capital — capital is managed locally
+        // to prevent stale JSONBin data from re-poisoning the balance.
+        const {capital:_ignoredCapital, ...farmWithoutCapital}=serverData;
+        if(farmWithoutCapital) applyFarmData(farmWithoutCapital);
       }catch(e){}
     },8000);
 
