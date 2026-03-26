@@ -102,6 +102,43 @@ function genPigTag(breed,stage,existingPigs){
 const fmtRWF=(n)=>"RWF "+Math.round(n||0).toLocaleString();
 const fmtNum=(n)=>Math.round(n||0).toLocaleString();
 
+/* ─── CallMeBot WhatsApp Integration ──────────────────────────────────────
+   Sends WhatsApp messages via CallMeBot free API.
+   Setup: https://www.callmebot.com/blog/free-api-whatsapp-messages/
+   User must first activate their number by messaging CallMeBot on WhatsApp.
+──────────────────────────────────────────────────────────────────────────── */
+function getWAConfig(){
+  try{return JSON.parse(localStorage.getItem("farmiq_wa_config")||"{}");}
+  catch{return {};}
+}
+function setWAConfig(cfg){
+  localStorage.setItem("farmiq_wa_config",JSON.stringify(cfg));
+}
+async function sendWhatsApp(message){
+  const {phone,apikey,enabled}=getWAConfig();
+  if(!enabled||!phone||!apikey) return {ok:false,reason:"not_configured"};
+  const url=`https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}&apikey=${encodeURIComponent(apikey)}`;
+  try{
+    // Use no-cors (fire-and-forget) — CallMeBot doesn't support CORS headers
+    await fetch(url,{method:"GET",mode:"no-cors"});
+    return {ok:true};
+  }catch(e){
+    return {ok:false,reason:e.message};
+  }
+}
+function isWAEnabled(){const c=getWAConfig();return !!(c.enabled&&c.phone&&c.apikey);}
+function getWAAlertPrefs(){
+  const c=getWAConfig();
+  return{
+    onSickPig:    c.onSickPig    !==false,
+    onDeath:      c.onDeath      !==false,
+    onSale:       c.onSale       !==false,
+    onLowStock:   c.onLowStock   !==false,
+    onFarrowingSoon: c.onFarrowingSoon!==false,
+    onLoss:       c.onLoss       !==false,
+  };
+}
+
 /* ─── Capital Helpers ─── */
 
 // ══════════════════════════════════════════════════════════
@@ -2543,6 +2580,610 @@ function ApprovalPanel({feeds,setFeeds,logs,setLogs,sales,setSales,expenses,setE
   </div>);
 }
 
+/* ═══════════════════════════════════════════════════
+   WORKER — WEEKLY PIG ASSESSMENT
+   Records weight + length + BCS for each active pig
+   Submitted for admin approval; approved data updates
+   pig weights and feeds into profitability analytics
+═══════════════════════════════════════════════════ */
+function WorkerPigAssessment({user,pigs,assessments,setAssessments}){
+  const active=pigs.filter(p=>p.status==="active");
+  const [tab,setTab]=useState("form");
+  const [rows,setRows]=useState(()=>active.map(p=>({pigId:p.id,tag:p.tag,breed:p.breed,stage:p.stage,currentWeight:p.weight,weight:"",length:"",bcs:"3",notes:"",done:false})));
+  const [saving,setSaving]=useState(false);
+  const [saved,setSaved]=useState(false);
+  const [toast,setToast]=useState(null);
+  const [confirm,setConfirm]=useState(false);
+
+  // Reset rows if pigs list changes
+  const myHistory=(assessments||[]).filter(a=>a.workerId===user.id).slice().reverse();
+  const pending=myHistory.filter(a=>a.approved===false);
+  const thisWeek=()=>{const d=new Date();const mon=new Date(d);mon.setDate(d.getDate()-d.getDay()+1);return mon.toISOString().slice(0,10);}
+  const weekStart=thisWeek();
+  const alreadyThisWeek=myHistory.some(a=>a.weekStart===weekStart);
+
+  function updateRow(pigId,field,val){setRows(r=>r.map(x=>x.pigId===pigId?{...x,[field]:val,done:!!(x.weight||(field==="weight"&&val))}:x));}
+
+  const filledCount=rows.filter(r=>r.weight).length;
+  const allFilled=filledCount===rows.length&&rows.length>0;
+
+  async function submit(){
+    setConfirm(false);setSaving(true);
+    const batch=rows.filter(r=>r.weight).map(r=>({
+      id:uid(),
+      pigId:r.pigId,
+      pigTag:r.tag,
+      pigBreed:r.breed,
+      pigStage:r.stage,
+      prevWeight:r.currentWeight,
+      weight:parseFloat(r.weight)||r.currentWeight,
+      length:r.length?parseFloat(r.length):null,
+      bcs:parseInt(r.bcs)||3,
+      notes:r.notes||"",
+      workerId:user.id,
+      worker:user.name,
+      date:toDay(),
+      weekStart,
+      approved:false,
+      submittedAt:new Date().toISOString()
+    }));
+    const updated=[...(assessments||[]),...batch];
+    setAssessments(updated);
+    fsSet("assessments",updated);
+    try{
+      const data=await getOnlineFarmData()||{};
+      await setOnlineFarmData({...data,assessments:updated});
+      setToast({type:"success",message:`✅ ${batch.length} pig assessment${batch.length>1?"s":""} submitted! Awaiting admin approval.`});
+      setSaved(true);
+    }catch(e){
+      setToast({type:"error",message:"Saved locally. Sync failed — check internet."});
+      setSaved(true);
+    }
+    setSaving(false);
+  }
+
+  const BCS_DESC={"1":"Emaciated — ribs & spine very prominent","2":"Thin — ribs easily felt","3":"Ideal — slight fat cover","4":"Fat — ribs hard to feel","5":"Obese — fat deposits visible"};
+
+  if(saved)return(<div style={{textAlign:"center",padding:60,maxWidth:460,margin:"0 auto"}}>
+    <div style={{fontSize:52,marginBottom:12}}>📏</div>
+    <div style={{fontSize:19,fontWeight:700,color:C.accent,marginBottom:6}}>Assessment Submitted!</div>
+    <div style={{fontSize:13,color:C.faint,marginBottom:20}}>The farm owner will review and approve your measurements. Once approved, pig weights will be updated automatically.</div>
+    <button onClick={()=>{setSaved(false);setTab("history");}} style={S.btn(C.accent)}>📋 View My Submissions →</button>
+  </div>);
+
+  return(<div className="fade-in">
+    {confirm&&<ConfirmDialog title="Submit Weekly Assessment?" body={`You're submitting measurements for ${filledCount} pig(s). Unmeasured pigs will be skipped. Submit now?`} onConfirm={submit} onCancel={()=>setConfirm(false)}/>}
+    {toast&&<Toast message={toast.message} type={toast.type} onClose={()=>setToast(null)}/>}
+
+    <div style={S.h1}>📏 Weekly Pig Assessment</div>
+    <div style={S.sub}>Measure weight & length for each pig — submitted for admin approval</div>
+
+    {alreadyThisWeek&&<div style={{padding:"10px 14px",background:"rgba(245,158,11,.08)",border:"1px solid rgba(245,158,11,.3)",borderRadius:9,marginBottom:14,fontSize:13,color:C.amber}}>
+      ⚠️ You already submitted an assessment this week ({weekStart}). You can submit again if measurements were missed or corrected.
+    </div>}
+
+    {/* Tabs */}
+    <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border}}>
+      {[["form","📝 New Assessment"],["history","📋 My History"]].map(([t,l])=>(
+        <button key={t} style={S.tab(tab===t)} onClick={()=>setTab(t)}>{l}</button>
+      ))}
+    </div>
+
+    {tab==="form"&&(<div>
+      {/* Progress bar */}
+      <div style={{...S.card,padding:"12px 16px",marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:6}}>
+          <span style={{fontWeight:700,color:C.text}}>Progress: {filledCount}/{rows.length} pigs measured</span>
+          <span style={{color:allFilled?C.accent:C.amber}}>{allFilled?"✅ All done!":"⏳ In progress"}</span>
+        </div>
+        <div style={{height:8,background:C.elevated,borderRadius:4,overflow:"hidden"}}>
+          <div style={{height:"100%",width:(rows.length>0?filledCount/rows.length*100:0)+"%",background:allFilled?C.accent:"#f59e0b",borderRadius:4,transition:"width .4s"}}/>
+        </div>
+      </div>
+
+      {/* Instructions */}
+      <div style={{...S.card,background:"rgba(37,99,235,.04)",border:"1px solid rgba(37,99,235,.2)",padding:"10px 14px",marginBottom:14,fontSize:12,color:C.muted}}>
+        📐 <b>Weight:</b> Use a weighing scale (kg) &nbsp;|&nbsp; 📏 <b>Length:</b> Measure from snout tip to tail base (cm) &nbsp;|&nbsp; 🔢 <b>BCS:</b> Body Condition Score 1–5
+      </div>
+
+      {rows.length===0&&<div style={{...S.card,textAlign:"center",padding:40,color:C.faint}}>No active pigs found. Ask admin to add pigs first.</div>}
+
+      {rows.map(r=>(
+        <div key={r.pigId} style={{...S.card,marginBottom:10,borderLeft:"4px solid "+(r.weight?C.accent:C.border)}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10,flexWrap:"wrap",gap:8}}>
+            <div>
+              <div style={{fontWeight:700,fontSize:14,color:C.text}}>🐷 {r.tag}</div>
+              <div style={{fontSize:11,color:C.faint}}>{r.breed} · {r.stage} · Current: <b>{r.currentWeight}kg</b></div>
+            </div>
+            {r.weight&&<span style={{fontSize:10,padding:"2px 9px",borderRadius:20,background:"rgba(22,163,74,.1)",color:C.accent,fontWeight:700}}>✓ Measured</span>}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:8}}>
+            <div>
+              <label style={S.lbl}>⚖️ Weight (kg) *</label>
+              <input type="number" min="1" max="500" step="0.1" value={r.weight} onChange={e=>updateRow(r.pigId,"weight",e.target.value)} placeholder={r.currentWeight} style={{...S.inp,borderColor:r.weight?"rgba(22,163,74,.5)":undefined}}/>
+            </div>
+            <div>
+              <label style={S.lbl}>📏 Length (cm)</label>
+              <input type="number" min="20" max="250" step="0.5" value={r.length} onChange={e=>updateRow(r.pigId,"length",e.target.value)} placeholder="e.g. 95" style={S.inp}/>
+            </div>
+            <div>
+              <label style={S.lbl}>🔢 BCS (1–5)</label>
+              <select value={r.bcs} onChange={e=>updateRow(r.pigId,"bcs",e.target.value)} style={S.inp}>
+                {[1,2,3,4,5].map(n=><option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+          </div>
+          {r.bcs&&<div style={{fontSize:11,color:C.faint,marginBottom:6,padding:"4px 8px",background:C.elevated,borderRadius:5}}>BCS {r.bcs}: {BCS_DESC[r.bcs]}</div>}
+          {r.weight&&r.currentWeight&&(()=>{const gain=parseFloat(r.weight)-r.currentWeight;return(<div style={{fontSize:11,color:gain>0?C.accent:gain<0?C.red:C.muted,marginBottom:6}}>
+            {gain>0?"📈":"gain"===0?"➡️":"📉"} Weight change from last record: <b>{gain>0?"+":""}{gain.toFixed(1)}kg</b>
+          </div>);})()}
+          <div>
+            <label style={S.lbl}>📝 Notes (optional)</label>
+            <input value={r.notes} onChange={e=>updateRow(r.pigId,"notes",e.target.value)} placeholder="Any observations, injuries, behavior changes..." style={S.inp}/>
+          </div>
+        </div>
+      ))}
+
+      {rows.length>0&&<div style={{position:"sticky",bottom:16,zIndex:10}}>
+        <button onClick={()=>filledCount>0&&setConfirm(true)} disabled={saving||filledCount===0} style={{...S.btn(filledCount>0?C.accent:"#94a3b8"),width:"100%",padding:13,fontSize:14,fontWeight:700,boxShadow:"0 4px 20px rgba(22,163,74,.35)"}}>
+          {saving?<><span className="spin" style={{...S.loader,borderTopColor:"#fff",width:15,height:15,marginRight:8}}/>Submitting…</>:`📤 Submit Assessment (${filledCount}/${rows.length} pigs)`}
+        </button>
+      </div>}
+    </div>)}
+
+    {tab==="history"&&(<div>
+      {myHistory.length===0&&<div style={{...S.card,textAlign:"center",padding:40,color:C.faint}}>No assessments submitted yet.</div>}
+      {pending.length>0&&<div style={{padding:"10px 14px",background:"rgba(245,158,11,.08)",border:"1px solid rgba(245,158,11,.3)",borderRadius:9,marginBottom:12,fontSize:13,color:C.amber}}>
+        ⏳ {pending.length} assessment(s) awaiting admin approval
+      </div>}
+      {/* Group by weekStart */}
+      {Object.entries(myHistory.reduce((acc,a)=>{const k=a.weekStart||a.date;if(!acc[k])acc[k]=[];acc[k].push(a);return acc;},{})).map(([week,items])=>(
+        <div key={week} style={{...S.card,marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <div style={{fontWeight:700,fontSize:13,color:C.text}}>📅 Week of {week}</div>
+            <span style={{fontSize:11,padding:"2px 9px",borderRadius:20,fontWeight:700,
+              background:items.some(a=>a.approved===false)?"rgba(245,158,11,.1)":"rgba(22,163,74,.1)",
+              color:items.some(a=>a.approved===false)?C.amber:C.accent}}>
+              {items.some(a=>a.approved===false)?"⏳ Pending":"✅ Approved"}
+            </span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:8}}>
+            {items.map(a=>(
+              <div key={a.id} style={{background:C.elevated,borderRadius:8,padding:"8px 10px",border:"1px solid "+C.border}}>
+                <div style={{fontWeight:700,fontSize:12,color:C.text}}>🐷 {a.pigTag}</div>
+                <div style={{fontSize:11,color:C.muted,marginTop:3}}>⚖️ {a.weight}kg {a.length?"· 📏 "+a.length+"cm":""}</div>
+                <div style={{fontSize:11,color:C.faint}}>BCS {a.bcs} · {a.date}</div>
+                {a.notes&&<div style={{fontSize:10,color:C.faint,marginTop:3,fontStyle:"italic"}}>{a.notes}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>)}
+  </div>);
+}
+
+/* ═══════════════════════════════════════════════════
+   ADMIN — PIG ASSESSMENT HISTORY & APPROVAL
+   Reviews all submitted assessments, approves/rejects
+   Approved assessments update pig weights and feed
+   into growth analytics and profitability reports
+═══════════════════════════════════════════════════ */
+function PigAssessmentHistory({pigs,setPigs,assessments,setAssessments,users}){
+  const [tab,setTab]=useState("pending");
+  const [selPig,setSelPig]=useState("all");
+  const [selWorker,setSelWorker]=useState("all");
+  const [toast,setToast]=useState(null);
+
+  const pending=(assessments||[]).filter(a=>a.approved===false);
+  const approved=(assessments||[]).filter(a=>a.approved===true);
+  const activePigs=pigs.filter(p=>p.status==="active");
+
+  function approve(a){
+    // Update pig's current weight
+    setPigs(p=>{
+      const u=p.map(pig=>pig.id===a.pigId?{...pig,weight:a.weight}:pig);
+      fsSet("pigs",u);
+      return u;
+    });
+    const updated=(assessments||[]).map(x=>x.id===a.id?{...x,approved:true,approvedAt:toDay()}:x);
+    setAssessments(updated);
+    fsSet("assessments",updated);
+    getOnlineFarmData().then(data=>setOnlineFarmData({...data,assessments:updated,
+      pigs:pigs.map(pig=>pig.id===a.pigId?{...pig,weight:a.weight}:pig)
+    })).catch(()=>{});
+    setToast({type:"success",message:`✅ Approved! ${a.pigTag} weight updated to ${a.weight}kg`});
+  }
+
+  function approveAll(batch){
+    let updatedPigs=[...pigs];
+    batch.forEach(a=>{
+      updatedPigs=updatedPigs.map(pig=>pig.id===a.pigId?{...pig,weight:a.weight}:pig);
+    });
+    setPigs(updatedPigs);
+    fsSet("pigs",updatedPigs);
+    const updatedA=(assessments||[]).map(x=>batch.find(b=>b.id===x.id)?{...x,approved:true,approvedAt:toDay()}:x);
+    setAssessments(updatedA);
+    fsSet("assessments",updatedA);
+    getOnlineFarmData().then(data=>setOnlineFarmData({...data,assessments:updatedA,pigs:updatedPigs})).catch(()=>{});
+    setToast({type:"success",message:`✅ Approved ${batch.length} assessments! Pig weights updated.`});
+  }
+
+  function reject(id){
+    const updated=(assessments||[]).filter(x=>x.id!==id);
+    setAssessments(updated);
+    fsSet("assessments",updated);
+    getOnlineFarmData().then(data=>setOnlineFarmData({...data,assessments:updated})).catch(()=>{});
+    setToast({type:"error",message:"🗑️ Assessment rejected and removed."});
+  }
+
+  // Per-pig growth history (approved only)
+  function pigGrowthHistory(pigId){
+    return (assessments||[]).filter(a=>a.pigId===pigId&&a.approved===true).sort((a,b)=>(a.date||"").localeCompare(b.date||""));
+  }
+
+  // ADG from assessment history
+  function calcADG(history){
+    if(history.length<2) return null;
+    const first=history[0];const last=history[history.length-1];
+    const days=Math.round((new Date(last.date)-new Date(first.date))/(1000*60*60*24));
+    if(days<=0) return null;
+    return ((last.weight-first.weight)/days).toFixed(3);
+  }
+
+  // Group pending by week
+  const pendingByWeek=pending.reduce((acc,a)=>{const k=a.weekStart||a.date;if(!acc[k])acc[k]=[];acc[k].push(a);return acc;},{});
+
+  // Filter approved
+  let filteredApproved=approved;
+  if(selPig!=="all") filteredApproved=filteredApproved.filter(a=>a.pigId===selPig);
+  if(selWorker!=="all") filteredApproved=filteredApproved.filter(a=>a.workerId===selWorker);
+
+  // Growth analytics — per pig
+  const pigAnalytics=activePigs.map(pig=>{
+    const hist=pigGrowthHistory(pig.id);
+    const adg=calcADG(hist);
+    const lastA=hist[hist.length-1];
+    const weightGain=hist.length>=2?hist[hist.length-1].weight-hist[0].weight:null;
+    const weekCount=hist.length;
+    const avgBCS=hist.length>0?(hist.reduce((s,h)=>s+(h.bcs||3),0)/hist.length).toFixed(1):null;
+    // Profitability signal: ADG vs stage benchmark
+    const ADG_BENCH={Piglet:0.20,Weaner:0.35,Grower:0.50,Finisher:0.65,Gilt:0.40,Sow:0.05,Boar:0.05};
+    const bench=ADG_BENCH[pig.stage]||0.5;
+    const perf=adg?((parseFloat(adg)/bench)*100).toFixed(0):null;
+    return{pig,hist,adg,lastA,weightGain,weekCount,avgBCS,perf};
+  }).filter(x=>x.weekCount>0).sort((a,b)=>b.weekCount-a.weekCount);
+
+  const BCS_COLOR={1:C.red,2:C.amber,3:C.accent,4:C.amber,5:C.red};
+
+  return(<div className="fade-in">
+    {toast&&<Toast message={toast.message} type={toast.type} onClose={()=>setToast(null)}/>}
+
+    <div style={S.h1}>📏 Growth Assessments</div>
+    <div style={S.sub}>Weekly pig measurements · Weight & length tracking · Growth analytics · Profitability signals</div>
+
+    {/* KPI row */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:10,marginBottom:16}}>
+      {[
+        {l:"Pending Approval",v:pending.length,c:pending.length>0?C.amber:C.accent},
+        {l:"Total Approved",v:approved.length,c:C.accent},
+        {l:"Pigs Tracked",v:pigAnalytics.length,c:C.blue},
+        {l:"This Week",v:(assessments||[]).filter(a=>{const d=new Date(a.date);const now=new Date();return(now-d)/(1000*60*60*24)<=7;}).length,c:C.purple},
+      ].map(s=>(
+        <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c,fontSize:20}}>{s.v}</div></div>
+      ))}
+    </div>
+
+    {/* Tabs */}
+    <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border,flexWrap:"wrap"}}>
+      {[["pending","⏳ Pending"+(pending.length?" ("+pending.length+")":"")],["analytics","📈 Growth Analytics"],["history","📋 All Records"]].map(([t,l])=>(
+        <button key={t} style={S.tab(tab===t)} onClick={()=>setTab(t)}>{l}</button>
+      ))}
+    </div>
+
+    {/* ── PENDING TAB ── */}
+    {tab==="pending"&&(<div>
+      {pending.length===0&&<div style={{...S.card,textAlign:"center",padding:40,color:C.faint}}>
+        <div style={{fontSize:36,marginBottom:8}}>✅</div>No pending assessments. All measurements are approved.
+      </div>}
+
+      {Object.entries(pendingByWeek).sort((a,b)=>b[0].localeCompare(a[0])).map(([week,items])=>(
+        <div key={week} style={{...S.card,marginBottom:14}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+            <div>
+              <div style={{fontWeight:700,fontSize:14,color:C.text}}>📅 Week of {week}</div>
+              <div style={{fontSize:11,color:C.faint}}>
+                {items.length} pig(s) measured by {[...new Set(items.map(a=>a.worker))].join(", ")}
+              </div>
+            </div>
+            <button onClick={()=>approveAll(items)} style={{...S.btn(C.accent),fontSize:12,padding:"7px 14px"}}>
+              ✅ Approve All ({items.length})
+            </button>
+          </div>
+
+          {items.map(a=>{
+            const pig=pigs.find(p=>p.id===a.pigId);
+            const weightChange=a.weight-(a.prevWeight||0);
+            const isGood=weightChange>0;
+            return(<div key={a.id} style={{...S.row,marginBottom:8,flexDirection:"column",alignItems:"stretch",padding:"12px 14px"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8,marginBottom:8}}>
+                <div>
+                  <div style={{fontWeight:700,fontSize:13,color:C.text}}>🐷 {a.pigTag} <span style={{fontWeight:400,color:C.faint,fontSize:11}}>({a.pigBreed} · {a.pigStage})</span></div>
+                  <div style={{fontSize:11,color:C.faint}}>Submitted by {a.worker} · {a.date}</div>
+                </div>
+                <div style={{display:"flex",gap:7}}>
+                  <button onClick={()=>approve(a)} style={{...S.btn(C.accent),fontSize:11,padding:"5px 12px"}}>✅ Approve</button>
+                  <button onClick={()=>reject(a.id)} style={{padding:"5px 12px",borderRadius:7,border:"1px solid rgba(239,68,68,.4)",background:"rgba(239,68,68,.06)",color:C.red,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>✗ Reject</button>
+                </div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:8}}>
+                {[
+                  ["Previous Weight",a.prevWeight+"kg",C.muted],
+                  ["New Weight",a.weight+"kg",isGood?C.accent:C.red],
+                  ["Weight Change",(weightChange>=0?"+":"")+weightChange.toFixed(1)+"kg",isGood?C.accent:C.red],
+                  ...(a.length?[["Length",a.length+"cm",C.blue]]:[]),
+                  ["BCS",""+a.bcs+"/5",BCS_COLOR[a.bcs]||C.text],
+                ].map(([l,v,c])=>(
+                  <div key={l} style={{background:C.elevated,borderRadius:7,padding:"6px 9px",textAlign:"center",border:"1px solid "+C.border}}>
+                    <div style={{fontSize:9,color:C.faint,marginBottom:2}}>{l}</div>
+                    <div style={{fontWeight:700,color:c,fontSize:13}}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              {a.notes&&<div style={{marginTop:8,fontSize:11,color:C.muted,fontStyle:"italic",padding:"5px 9px",background:C.elevated,borderRadius:6}}>📝 {a.notes}</div>}
+            </div>);
+          })}
+        </div>
+      ))}
+    </div>)}
+
+    {/* ── GROWTH ANALYTICS TAB ── */}
+    {tab==="analytics"&&(<div>
+      {pigAnalytics.length===0&&<div style={{...S.card,textAlign:"center",padding:40,color:C.faint}}>
+        <div style={{fontSize:36,marginBottom:8}}>📈</div>No approved assessments yet. Approve worker submissions to see growth analytics.
+      </div>}
+
+      {pigAnalytics.length>0&&<div style={{...S.card,background:"rgba(22,163,74,.04)",border:"1px solid rgba(22,163,74,.2)",marginBottom:14}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:10}}>💡 Farm Growth Summary</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:10,fontSize:12}}>
+          {(()=>{
+            const adgs=pigAnalytics.filter(x=>x.adg!==null).map(x=>parseFloat(x.adg));
+            const avgADG=adgs.length>0?(adgs.reduce((s,v)=>s+v,0)/adgs.length).toFixed(3):null;
+            const aboveTarget=pigAnalytics.filter(x=>x.perf&&parseInt(x.perf)>=90).length;
+            const belowTarget=pigAnalytics.filter(x=>x.perf&&parseInt(x.perf)<70).length;
+            return[
+              ["Avg Daily Gain",avgADG?avgADG+"kg/day":"—",C.accent],
+              ["On Target (≥90%)",aboveTarget+" pigs",C.accent],
+              ["Below Target (<70%)",belowTarget+" pigs",belowTarget>0?C.red:C.faint],
+              ["Total Tracked",pigAnalytics.length+" pigs",C.blue],
+            ].map(([l,v,c])=>(
+              <div key={l} style={{background:C.surface,borderRadius:8,padding:"9px 11px",textAlign:"center",border:"1px solid "+C.border}}>
+                <div style={{fontSize:10,color:C.faint,marginBottom:3}}>{l}</div>
+                <div style={{fontWeight:700,color:c,fontSize:14}}>{v}</div>
+              </div>
+            ));
+          })()}
+        </div>
+      </div>}
+
+      {pigAnalytics.map(({pig,hist,adg,weightGain,weekCount,avgBCS,perf})=>{
+        const perfNum=perf?parseInt(perf):null;
+        const perfColor=perfNum===null?C.faint:perfNum>=90?C.accent:perfNum>=70?C.amber:C.red;
+        const perfLabel=perfNum===null?"No data":perfNum>=90?"🟢 On Target":perfNum>=70?"🟡 Below Target":"🔴 Poor Growth";
+        return(<div key={pig.id} style={{...S.card,marginBottom:12,borderLeft:"4px solid "+perfColor}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10,flexWrap:"wrap",gap:8}}>
+            <div>
+              <div style={{fontWeight:700,fontSize:14,color:C.text}}>🐷 {pig.tag} <span style={{fontWeight:400,color:C.faint,fontSize:11}}>({pig.breed} · {pig.stage})</span></div>
+              <div style={{fontSize:11,color:C.faint}}>{weekCount} assessment{weekCount>1?"s":""} recorded</div>
+            </div>
+            <span style={{fontSize:11,padding:"3px 10px",borderRadius:20,background:perfColor+"18",color:perfColor,fontWeight:700,border:"1px solid "+perfColor+"33"}}>{perfLabel}</span>
+          </div>
+
+          {/* Metrics */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:8,marginBottom:10}}>
+            {[
+              ["Current Weight",pig.weight+"kg",C.text],
+              ["Total Gain",weightGain!==null?(weightGain>=0?"+":"")+weightGain.toFixed(1)+"kg":hist.length===1?hist[0].weight+"kg (1 reading)":"—",weightGain>=0?C.accent:C.red],
+              ["Avg Daily Gain",adg?adg+"kg":"—",C.blue],
+              ["vs Benchmark",perf?perf+"%":"—",perfColor],
+              ["Avg BCS",avgBCS?avgBCS+"/5":"—",BCS_COLOR[Math.round(parseFloat(avgBCS||3))]||C.text],
+              ["Weeks Tracked",weekCount,C.purple],
+            ].map(([l,v,c])=>(
+              <div key={l} style={{background:C.elevated,borderRadius:7,padding:"6px 9px",textAlign:"center",border:"1px solid "+C.border}}>
+                <div style={{fontSize:9,color:C.faint,marginBottom:2}}>{l}</div>
+                <div style={{fontWeight:700,color:c,fontSize:12}}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Weight trend chart (simple bars) */}
+          {hist.length>=2&&<div style={{marginBottom:8}}>
+            <div style={{fontSize:11,color:C.muted,marginBottom:6}}>📊 Weight trend (kg)</div>
+            <div style={{display:"flex",gap:4,alignItems:"flex-end",height:52}}>
+              {hist.map((h,i)=>{
+                const min=Math.min(...hist.map(x=>x.weight));
+                const max=Math.max(...hist.map(x=>x.weight));
+                const range=max-min||1;
+                const ht=Math.max(((h.weight-min)/range)*40+10,8);
+                return(<div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                  <div style={{fontSize:8,color:C.faint}}>{h.weight}</div>
+                  <div style={{width:"100%",height:ht,background:i===hist.length-1?"linear-gradient(180deg,"+C.accent+",#10b981)":"linear-gradient(180deg,#93c5fd,#60a5fa)",borderRadius:3,transition:"height .4s"}}/>
+                  <div style={{fontSize:7,color:C.faint,textAlign:"center"}}>{(h.date||"").slice(5)}</div>
+                </div>);
+              })}
+            </div>
+          </div>}
+
+          {/* Profitability signal */}
+          {adg&&<div style={{padding:"7px 10px",borderRadius:7,fontSize:11,background:perfColor+"0d",border:"1px solid "+perfColor+"33",color:perfColor}}>
+            {perfNum>=90&&"✅ Growing well above target — ideal time to maintain feed and plan for market sale."}
+            {perfNum>=70&&perfNum<90&&"⚠️ Growth is slightly below target. Review feed quality and quantity."}
+            {perfNum<70&&"🔴 Poor growth rate vs benchmark. Check for illness, parasites, or feed issues. Consider vet visit."}
+          </div>}
+        </div>);
+      })}
+    </div>)}
+
+    {/* ── HISTORY TAB ── */}
+    {tab==="history"&&(<div>
+      <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap"}}>
+        <select value={selPig} onChange={e=>setSelPig(e.target.value)} style={{...S.inp,width:"auto"}}>
+          <option value="all">All Pigs</option>
+          {activePigs.map(p=><option key={p.id} value={p.id}>{p.tag} ({p.stage})</option>)}
+        </select>
+        <select value={selWorker} onChange={e=>setSelWorker(e.target.value)} style={{...S.inp,width:"auto"}}>
+          <option value="all">All Workers</option>
+          {[...new Set((assessments||[]).map(a=>a.workerId))].map(wid=>{
+            const w=users.find(u=>u.id===wid);
+            return w?<option key={wid} value={wid}>{w.name}</option>:null;
+          })}
+        </select>
+      </div>
+      {filteredApproved.length===0&&<div style={{...S.card,textAlign:"center",padding:40,color:C.faint}}>No approved records match the selected filter.</div>}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10}}>
+        {filteredApproved.slice().reverse().map(a=>(
+          <div key={a.id} style={{...S.card,padding:"10px 13px",marginBottom:0}}>
+            <div style={{fontWeight:700,fontSize:13,color:C.text}}>🐷 {a.pigTag}</div>
+            <div style={{fontSize:11,color:C.faint,marginTop:2}}>{a.pigStage} · {a.date}</div>
+            <div style={{display:"flex",gap:10,marginTop:8,flexWrap:"wrap"}}>
+              <span style={{fontSize:12,fontWeight:700,color:C.accent}}>⚖️ {a.weight}kg</span>
+              {a.length&&<span style={{fontSize:12,color:C.blue}}>📏 {a.length}cm</span>}
+              <span style={{fontSize:12,color:BCS_COLOR[a.bcs]||C.text}}>BCS {a.bcs}</span>
+            </div>
+            <div style={{fontSize:10,color:C.faint,marginTop:4}}>By {a.worker}</div>
+            {a.notes&&<div style={{fontSize:10,color:C.muted,marginTop:4,fontStyle:"italic"}}>{a.notes}</div>}
+          </div>
+        ))}
+      </div>
+    </div>)}
+  </div>);
+}
+
+/* ═══════════════════════════════════════════════════
+   WHATSAPP ALERTS SETTINGS (CallMeBot)
+═══════════════════════════════════════════════════ */
+function WhatsAppSettings({pigs,feeds,logs,sales,expenses,incomes,reproductions,stock}){
+  const saved=getWAConfig();
+  const [phone,setPhone]=useState(saved.phone||"");
+  const [apikey,setApikey]=useState(saved.apikey||"");
+  const [enabled,setEnabled]=useState(!!saved.enabled);
+  const [prefs,setPrefs]=useState({
+    onSickPig:    saved.onSickPig    !==false,
+    onDeath:      saved.onDeath      !==false,
+    onSale:       saved.onSale       !==false,
+    onLowStock:   saved.onLowStock   !==false,
+    onFarrowingSoon: saved.onFarrowingSoon!==false,
+    onLoss:       saved.onLoss       !==false,
+  });
+  const [saveFeedback,setSaveFeedback]=useState("");
+  const [testStatus,setTestStatus]=useState("");
+  const [testing,setTesting]=useState(false);
+
+  function save(){
+    setWAConfig({phone:phone.trim(),apikey:apikey.trim(),enabled,...prefs});
+    setSaveFeedback("✅ Settings saved!");
+    setTimeout(()=>setSaveFeedback(""),3000);
+  }
+
+  async function test(){
+    setTesting(true);setTestStatus("");
+    const phone2=phone.trim();const apikey2=apikey.trim();
+    if(!phone2||!apikey2){setTestStatus("❌ Enter phone and API key first.");setTesting(false);return;}
+    const msg=`🐷 FarmIQ Test Alert!\nFarm: ${pigs.filter(p=>p.status==="active").length} active pigs\nDate: ${toDay()}\nWhatsApp alerts are working!`;
+    const url=`https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(phone2)}&text=${encodeURIComponent(msg)}&apikey=${encodeURIComponent(apikey2)}`;
+    try{
+      await fetch(url,{method:"GET",mode:"no-cors"});
+      setTestStatus("📨 Test message sent! Check your WhatsApp. (If it doesn't arrive, verify your phone number and API key.)");
+    }catch(e){
+      setTestStatus("❌ Failed: "+e.message);
+    }
+    setTesting(false);
+  }
+
+  const alertOptions=[
+    {key:"onSickPig",    icon:"🏥", label:"Sick pig reported in daily log"},
+    {key:"onDeath",      icon:"💀", label:"Pig death recorded"},
+    {key:"onSale",       icon:"💰", label:"Pig sale completed"},
+    {key:"onLowStock",   icon:"📦", label:"Feed/stock falls below minimum"},
+    {key:"onFarrowingSoon",icon:"🐖",label:"Sow due to farrow within 7 days"},
+    {key:"onLoss",       icon:"📉", label:"Farm running at a financial loss"},
+  ];
+
+  return(<div className="fade-in">
+    <div style={S.h1}>📱 WhatsApp Alerts</div>
+    <div style={S.sub}>Get real-time farm alerts on WhatsApp via CallMeBot (free service)</div>
+
+    {/* Setup guide */}
+    <div style={{...S.card,background:"linear-gradient(135deg,rgba(37,211,102,.07),rgba(22,163,74,.04))",border:"1px solid rgba(37,211,102,.3)",marginBottom:14}}>
+      <div style={{fontSize:13,fontWeight:700,color:"#128C7E",marginBottom:8}}>📋 How to Set Up (One-time)</div>
+      <div style={{fontSize:12,color:C.muted,lineHeight:1.8}}>
+        <b>1.</b> Open WhatsApp and send this message to <b>+34 644 65 00 63</b>:<br/>
+        <span style={{fontFamily:"monospace",background:C.elevated,padding:"2px 7px",borderRadius:4,display:"inline-block",margin:"4px 0",color:C.text}}>I allow callmebot to send me messages</span><br/>
+        <b>2.</b> You will receive a reply with your personal <b>API key</b>.<br/>
+        <b>3.</b> Enter your WhatsApp phone number (with country code, e.g. <b>+250788123456</b>) and the API key below.<br/>
+        <b>4.</b> Click "Save" then "Send Test Message" to verify.
+      </div>
+      <a href="https://www.callmebot.com/blog/free-api-whatsapp-messages/" target="_blank" rel="noreferrer"
+        style={{fontSize:11,color:"#128C7E",display:"inline-block",marginTop:8,textDecoration:"underline"}}>
+        📖 Full CallMeBot documentation →
+      </a>
+    </div>
+
+    {/* Config form */}
+    <div style={S.card}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.text}}>⚙️ Configuration</div>
+        <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
+          <span style={{fontSize:12,color:enabled?C.accent:C.muted,fontWeight:600}}>{enabled?"🟢 Enabled":"⚪ Disabled"}</span>
+          <div onClick={()=>setEnabled(p=>!p)} style={{width:40,height:22,borderRadius:11,background:enabled?C.accent:"#cbd5e1",position:"relative",cursor:"pointer",transition:"background .2s",flexShrink:0}}>
+            <div style={{position:"absolute",top:3,left:enabled?21:3,width:16,height:16,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 4px rgba(0,0,0,.2)"}}/>
+          </div>
+        </label>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
+        <div>
+          <label style={S.lbl}>📞 WhatsApp Phone (with country code)</label>
+          <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="+250788123456" style={S.inp}/>
+        </div>
+        <div>
+          <label style={S.lbl}>🔑 CallMeBot API Key</label>
+          <input value={apikey} onChange={e=>setApikey(e.target.value)} placeholder="1234567" type="password" style={S.inp}/>
+        </div>
+      </div>
+      <div style={{display:"flex",gap:9}}>
+        <button onClick={save} style={{...S.btn(C.accent),flex:1}}>💾 Save Settings</button>
+        <button onClick={test} disabled={testing} style={{...S.btn("#128C7E")}}>
+          {testing?<><span className="spin" style={{...S.loader,borderTopColor:"#fff"}}/>Testing…</>:"📨 Send Test Message"}
+        </button>
+      </div>
+      {saveFeedback&&<div style={{marginTop:10,padding:"8px 12px",background:C.accentSoft,border:"1px solid rgba(22,163,74,.3)",borderRadius:7,fontSize:13,color:C.accent}}>{saveFeedback}</div>}
+      {testStatus&&<div style={{marginTop:10,padding:"8px 12px",background:"rgba(37,211,102,.07)",border:"1px solid rgba(37,211,102,.3)",borderRadius:7,fontSize:12,color:C.muted,lineHeight:1.6}}>{testStatus}</div>}
+    </div>
+
+    {/* Alert preferences */}
+    <div style={S.card}>
+      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>🔔 Alert Preferences</div>
+      <div style={{fontSize:11,color:C.faint,marginBottom:12}}>Choose which events trigger a WhatsApp message:</div>
+      {alertOptions.map(({key,icon,label})=>(
+        <div key={key} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 12px",background:prefs[key]?"rgba(22,163,74,.05)":C.elevated,borderRadius:8,marginBottom:7,border:"1px solid "+(prefs[key]?"rgba(22,163,74,.2)":C.border)}}>
+          <span style={{fontSize:13,color:C.text}}>{icon} {label}</span>
+          <div onClick={()=>setPrefs(p=>({...p,[key]:!p[key]}))} style={{width:36,height:20,borderRadius:10,background:prefs[key]?C.accent:"#cbd5e1",position:"relative",cursor:"pointer",transition:"background .2s",flexShrink:0}}>
+            <div style={{position:"absolute",top:2,left:prefs[key]?18:2,width:16,height:16,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,.2)"}}/>
+          </div>
+        </div>
+      ))}
+      <button onClick={save} style={{...S.btn(C.accent),marginTop:4,width:"100%"}}>💾 Save Preferences</button>
+    </div>
+
+    {/* Status */}
+    <div style={{...S.card,background:enabled&&phone&&apikey?"rgba(22,163,74,.04)":"rgba(245,158,11,.04)",border:"1px solid "+(enabled&&phone&&apikey?"rgba(22,163,74,.25)":"rgba(245,158,11,.3)")}}>
+      <div style={{fontSize:12,color:C.muted}}>
+        <b>Status:</b> {enabled&&phone&&apikey?"✅ WhatsApp alerts are active. FarmIQ will send you messages for selected events.":"⚠️ WhatsApp alerts are inactive. "+(!phone?"Enter your phone number. ":"")+(!apikey?"Enter your API key. ":"")+(!enabled?"Toggle 'Enabled' above. ":"")}
+      </div>
+    </div>
+  </div>);
+}
+
 function App(){
   const [users,setUsers]=useState(INIT_USERS);
   const [usersLoaded,setUsersLoaded]=useState(false);
@@ -2569,6 +3210,7 @@ function App(){
   const [tasks,setTasks]=useState([]);
   const [vaccinations,setVaccinations]=useState([]);
   const [pendingPigs,setPendingPigs]=useState([]);
+  const [assessments,setAssessments]=useState([]);
   const [capital,setCapital]=useState({initial:0,transactions:[],updatedAt:""});
   const [capitalLoaded,setCapitalLoaded]=useState(false);
   const [user,setUser]=useState(null);
@@ -2622,6 +3264,7 @@ function App(){
     if(Array.isArray(data.vaccinations)) setVaccinations(data.vaccinations);
     if(Array.isArray(data.sessions))   setSessions(data.sessions);
     if(Array.isArray(data.pendingPigs)) setPendingPigs(data.pendingPigs);
+    if(Array.isArray(data.assessments)) setAssessments(data.assessments);
     // Capital: only load if explicitly present AND strip all refId transactions
     // refId transactions are orphan-prone — balance is derived from actual arrays
     if(data.capital&&typeof data.capital==="object"&&data.__loadCapital===true){
@@ -2742,7 +3385,7 @@ function App(){
   const lowStockCount=(stock||[]).filter(s=>s.quantity<=s.minLevel).length;
   const upcomingFarrows=reproductions.filter(r=>r.status==="pregnant"&&daysDiff(r.expectedFarrow)>=0&&daysDiff(r.expectedFarrow)<=7).length;
   const allData={pigs,feeds,sales,logs,expenses,incomes,users,messages,reproductions,stock};
-  const pendingDataCount=[...feeds,...logs,...sales,...expenses].filter(x=>x.approved===false).length + (pendingPigs||[]).filter(x=>x.approved===false&&!x.rejected).length;
+  const pendingDataCount=[...feeds,...logs,...sales,...expenses].filter(x=>x.approved===false).length + (pendingPigs||[]).filter(x=>x.approved===false&&!x.rejected).length + (assessments||[]).filter(x=>x.approved===false).length;
 
   // Compute alert count for nav badge
   const alerts_overdue=(reproductions||[]).filter(r=>r.status==="pregnant"&&daysDiff(r.expectedFarrow)<0).length;
@@ -2766,6 +3409,7 @@ function App(){
     {id:"capital",l:"💵 Capital"},
     {id:"finance",l:"💰 Financials"},
     {id:"pigs",l:"🐷 Pigs"},
+    {id:"assessmenthistory",l:"📏 Growth Assessments"+(assessments.filter(a=>a.approved===false).length?" 🔴"+assessments.filter(a=>a.approved===false).length:"")},
     {id:"feeding",l:"🌾 Feeding"},
     {id:"adminfeed",l:"🌾 Add Feed Log"},
     {id:"sales",l:"🏷️ Sales"},
@@ -2781,7 +3425,8 @@ function App(){
     {id:"weekly",l:"📊 Weekly Report"},
     {id:"tasks",l:"✅ Tasks"+(tasks.filter(t=>t.status==="pending").length?" ("+tasks.filter(t=>t.status==="pending").length+")":"")},
     {id:"vaccination",l:"💉 Vaccinations"+(vaccinations.filter(v=>daysDiff(v.nextDue)<=7&&daysDiff(v.nextDue)>=0).length?" 🔔":"")},
-    {id:"changepassword",l:"🔒 Change Password"}
+    {id:"changepassword",l:"🔒 Change Password"},
+    {id:"whatsapp",l:"📱 WhatsApp Alerts"+(isWAEnabled()?" 🟢":"")}
   ];
   const workerNav=[
     {id:"home",l:"🏠 Dashboard"},
@@ -2791,6 +3436,7 @@ function App(){
     {id:"saleentry",l:"🏷️ Log Sale"},
     {id:"buyentry",l:"🛒 Log Purchase"},
     {id:"pigentry",l:"🐷 Register Pig"},
+    {id:"assessment",l:"📏 Weekly Assessment"+(assessments.filter(a=>a.workerId===user.id&&a.approved===false).length?" ⏳":"")},
     {id:"remotework",l:"🖥️ Remote Work"+(sessions.filter(s=>s.workerId===user.id&&s.status==="active").length?" ●":"")},
     {id:"performance",l:"👷 Performance"},
     {id:"weekly",l:"📊 Weekly Report"},
@@ -2925,6 +3571,9 @@ function App(){
       {page==="tasks"&&<TaskManager user={user} users={users} tasks={tasks} setTasks={setTasks}/>}
       {page==="vaccination"&&<VaccinationTracker pigs={pigs} users={users} vaccinations={vaccinations} setVaccinations={setVaccinations} user={user} capital={capital} setCapital={setCapital}/>}
       {page==="changepassword"&&<ChangePassword user={user} users={users} setUsers={setUsers}/>}
+      {isAdmin&&page==="whatsapp"&&<WhatsAppSettings pigs={pigs} feeds={feeds} logs={logs} sales={sales} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
+      {!isAdmin&&page==="assessment"&&<WorkerPigAssessment user={user} pigs={pigs} assessments={assessments} setAssessments={setAssessments}/>}
+      {isAdmin&&page==="assessmenthistory"&&<PigAssessmentHistory pigs={pigs} setPigs={setPigs} assessments={assessments} setAssessments={setAssessments} users={users}/>}
     </div>
   </div>);
 }
@@ -5744,6 +6393,16 @@ function DEntry({user,pigs,logs,setLogs,capital,setCapital}){
     try{
       await jbinAppend("logs",newLog);
       setToast({type:"success",message:isAdmin?"✅ Daily report saved!":"✅ Report submitted! Awaiting admin approval."});
+      // Auto WhatsApp alert for sick pigs or deaths
+      if(isAdmin){
+        const waPrefs=getWAAlertPrefs();
+        if(form.sick>0&&waPrefs.onSickPig){
+          sendWhatsApp(`🚨 FarmIQ Alert — ${toDay()}\n🏥 ${form.sick} sick pig(s) reported by ${user.name}.\nCheck health logs immediately.`);
+        }
+        if(form.deaths>0&&waPrefs.onDeath){
+          sendWhatsApp(`💀 FarmIQ Alert — ${toDay()}\n${form.deaths} pig death(s) recorded by ${user.name}.${form.deathLossAmount?"\nLoss: RWF "+parseInt(form.deathLossAmount).toLocaleString():""}\nReview cause urgently.`);
+        }
+      }
       setTimeout(()=>setDone(true),1600);
     }catch(e){setToast({type:"error",message:"Failed to save. Check internet and try again."});}
   }
@@ -6015,6 +6674,10 @@ function SEntry({user,pigs,setPigs,sales,setSales,capital,setCapital}){
     try{
       await jbinAppend("sales",newSale);
       setToast({type:"success",message:isAdmin?`Sale of ${fmtRWF(Math.round(newSale.total))} recorded!`:"✅ Sale submitted! Awaiting admin approval."});
+      // Auto WhatsApp alert on sale
+      if(isAdmin&&getWAAlertPrefs().onSale){
+        sendWhatsApp(`💰 FarmIQ Sale — ${toDay()}\n🐷 ${selPig?selPig.tag:"Pig"} sold to ${form.buyer||"buyer"}\n${form.weight}kg @ RWF ${parseInt(form.priceKg||0).toLocaleString()}/kg\n💵 Total: ${fmtRWF(Math.round(newSale.total))}`);
+      }
       setSaved(true);
       setTimeout(()=>{setSaved(false);setForm({pigId:"",buyer:"",weight:"",priceKg:"",total:"",notes:""});},2000);
     }catch(e){setToast({type:"error",message:"Failed to save. Check internet and try again."});}
@@ -7477,6 +8140,8 @@ function PigPerformance({pigs,feeds,sales,logs,expenses,incomes,reproductions}){
 function SmartAlerts({pigs,feeds,logs,sales,expenses,incomes,reproductions,stock,users,tasks,vaccinations,capital,setPage}){
   const active=pigs.filter(p=>p.status==="active");
   const today=toDay();
+  const [waSending,setWASending]=useState(false);
+  const [waStatus,setWAStatus]=useState("");
 
   // Build all alerts
   const alerts=[];
@@ -7637,12 +8302,40 @@ function SmartAlerts({pigs,feeds,logs,sales,expenses,incomes,reproductions,stock
   const critCount=alerts.filter(a=>a.priority===0).length;
   const highCount=alerts.filter(a=>a.priority===1).length;
 
+  async function sendAlertsToWA(){
+    if(waSending) return;
+    setWASending(true);setWAStatus("");
+    const critical=alerts.filter(a=>a.priority<=1);
+    if(critical.length===0){setWAStatus("ℹ️ No critical/high alerts to send.");setWASending(false);return;}
+    const lines=[`🐷 *FarmIQ Alert — ${toDay()}*`,""];
+    critical.forEach((a,i)=>{
+      lines.push(`${i+1}. ${a.title}`);
+      if(a.body) lines.push(`   ${a.body}`);
+    });
+    lines.push("","_Via FarmIQ Rwanda_");
+    const msg=lines.join("\n");
+    const res=await sendWhatsApp(msg);
+    if(res.ok) setWAStatus("✅ Sent "+critical.length+" alert(s) to WhatsApp!");
+    else if(res.reason==="not_configured") setWAStatus("⚠️ WhatsApp not configured. Go to 📱 WhatsApp Alerts in the menu.");
+    else setWAStatus("⚠️ Sent (delivery unconfirmed — CallMeBot doesn't support CORS confirmation).");
+    setWASending(false);
+    setTimeout(()=>setWAStatus(""),6000);
+  }
+
   const priorityLabel=["🚨 CRITICAL","🔴 High","🟡 Medium","🟢 Info"];
   const priorityBg=["rgba(239,68,68,.06)","rgba(239,68,68,.04)","rgba(245,158,11,.04)","rgba(22,163,74,.04)"];
 
   return(<div className="fade-in">
-    <div style={S.h1}>🔔 Smart Alerts</div>
-    <div style={S.sub}>All farm alerts in one place · {alerts.length} alert{alerts.length!==1?"s":""} · {critCount>0?critCount+" critical":"No critical issues"}</div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10,marginBottom:4}}>
+      <div>
+        <div style={S.h1}>🔔 Smart Alerts</div>
+        <div style={S.sub}>All farm alerts in one place · {alerts.length} alert{alerts.length!==1?"s":""} · {critCount>0?critCount+" critical":"No critical issues"}</div>
+      </div>
+      <button onClick={sendAlertsToWA} disabled={waSending} style={{...S.btn("#128C7E"),display:"flex",alignItems:"center",gap:7,fontSize:12,padding:"8px 14px"}}>
+        {waSending?<><span className="spin" style={{...S.loader,borderTopColor:"#fff"}}/>Sending…</>:<>📱 Send to WhatsApp</>}
+      </button>
+    </div>
+    {waStatus&&<div style={{padding:"9px 14px",background:"rgba(37,211,102,.08)",border:"1px solid rgba(37,211,102,.3)",borderRadius:9,fontSize:12,color:C.muted,marginBottom:12}}>{waStatus}</div>}
 
     {/* Summary */}
     <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
