@@ -2433,8 +2433,17 @@ function App(){
   const allData={pigs,feeds,sales,logs,expenses,incomes,users,messages,reproductions,stock};
   const pendingDataCount=[...feeds,...logs,...sales,...expenses].filter(x=>x.approved===false).length;
 
+  // Compute alert count for nav badge
+  const alerts_overdue=(reproductions||[]).filter(r=>r.status==="pregnant"&&daysDiff(r.expectedFarrow)<0).length;
+  const alerts_sick=logs.filter(l=>l.date===toDay()&&l.sick>0).reduce((s,l)=>s+(l.sick||0),0);
+  const alerts_stock=(stock||[]).filter(s=>s.quantity<=s.minLevel).length;
+  const alerts_count=alerts_overdue+Math.min(alerts_sick,1)+Math.min(alerts_stock,1)+Math.min(pendingDataCount,1);
   const adminNav=[
     {id:"home",l:"📊 Overview"},
+    {id:"alerts",l:"🔔 Alerts"+(alerts_count>0?" ("+alerts_count+")":"")},
+    {id:"profitinsight",l:"💡 Profit Insight"},
+    {id:"feedefficiency",l:"🌾 Feed Efficiency"},
+    {id:"pigperformance",l:"📈 Pig Performance"},
     {id:"approvals",l:"✅ Approvals"+(pendingDataCount>0?" 🔴"+pendingDataCount:"")},
     {id:"ai",l:"🤖 AI Advisor"},
     {id:"bigdata",l:"🧠 Big Data"},
@@ -2563,6 +2572,10 @@ function App(){
           <button onClick={()=>setPage("approvals")} style={{padding:"9px 18px",borderRadius:9,border:"none",cursor:"pointer",background:"#dc2626",color:"#fff",fontWeight:700,fontSize:13,fontFamily:"inherit",whiteSpace:"nowrap"}}>✅ Review Now →</button>
         </div>
       )}
+      {isAdmin&&page==="alerts"&&<SmartAlerts pigs={pigs} feeds={feeds} logs={logs} sales={sales} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} users={users} tasks={tasks} vaccinations={vaccinations} capital={capital} setPage={setPage}/>}
+      {isAdmin&&page==="profitinsight"&&<ProfitInsight pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} capital={capital}/>}
+      {isAdmin&&page==="feedefficiency"&&<FeedEfficiency pigs={pigs} feeds={feeds} logs={logs} expenses={expenses} sales={sales} incomes={incomes}/>}
+      {isAdmin&&page==="pigperformance"&&<PigPerformance pigs={pigs} logs={logs} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes}/>}
       {isAdmin&&page==="approvals"&&<ApprovalPanel feeds={feeds} setFeeds={setFeeds} logs={logs} setLogs={setLogs} sales={sales} setSales={setSales} expenses={expenses} setExpenses={setExpenses} pigs={pigs} setPigs={setPigs} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="bigdata"&&<BigData pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} users={users} capital={capital}/>}
       {isAdmin&&page==="home"&&<AHome pigs={pigs} feeds={feeds} sales={sales} logs={logs} users={users} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} allData={allData} setPage={setPage} capital={capital} setCapital={setCapital}/>}
@@ -5751,6 +5764,841 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
           )}
         </div>
       ))}
+    </div>}
+  </div>);
+}
+
+/* ═══════════════════════════════════════════════════
+   FEED EFFICIENCY MODULE
+   Actual vs expected feed, cost trends, waste detection
+═══════════════════════════════════════════════════ */
+function FeedEfficiency({pigs,feeds,logs,expenses,sales,incomes}){
+  const [tab,setTab]=useState("overview");
+  const active=pigs.filter(p=>p.status==="active");
+  const STAGE_FEED={Piglet:0.5,Weaner:1.0,Grower:1.8,Finisher:2.8,Gilt:2.2,Sow:2.5,Boar:2.0};
+  const FEED_REF={"Maize bran":350,"Soya meal":800,"Pellets":950,"Kitchen waste":0,"Mixed":500,"Other":400};
+
+  // Overall totals
+  const totalKg=feeds.reduce((s,f)=>s+(parseFloat(f.kg)||0),0);
+  const totalCost=feeds.reduce((s,f)=>s+(parseFloat(f.cost)||0),0);
+  const avgCpk=totalKg>0?Math.round(totalCost/totalKg):0;
+
+  // Expected daily feed based on herd
+  const expectedDaily=active.reduce((s,p)=>s+(STAGE_FEED[p.stage]||2.0),0);
+  const logDays=feeds.length>0?new Set(feeds.map(f=>f.date)).size:1;
+  const actualDaily=logDays>0?Math.round((totalKg/logDays)*10)/10:0;
+  const effPct=expectedDaily>0?Math.round((actualDaily/expectedDaily)*100):null;
+  const effColor=effPct===null?C.faint:effPct>=90&&effPct<=115?C.accent:effPct<80?C.red:C.amber;
+
+  // FCR (Feed Conversion Ratio): kg feed per kg weight gain estimated
+  // Estimate weight gain from pig records over time (simplified)
+  const totalFeedKg=totalKg;
+  // Per-stage breakdown
+  const byStage={};
+  active.forEach(p=>{
+    const s=p.stage;
+    if(!byStage[s])byStage[s]={count:0,expected:0,pigs:[]};
+    byStage[s].count++;
+    byStage[s].expected+=STAGE_FEED[s]||2.0;
+    byStage[s].pigs.push(p);
+  });
+
+  // Per feed type cost analysis
+  const byType={};
+  feeds.forEach(f=>{
+    const t=f.feedType||"Other";
+    if(!byType[t])byType[t]={kg:0,cost:0,count:0};
+    byType[t].kg+=parseFloat(f.kg)||0;
+    byType[t].cost+=parseFloat(f.cost)||0;
+    byType[t].count++;
+  });
+
+  // Last 30 days trend
+  const now=new Date();
+  const days30=feeds.filter(f=>{
+    if(!f.date)return false;
+    const d=new Date(f.date);
+    return (now-d)/(1000*60*60*24)<=30;
+  });
+  const days30Kg=days30.reduce((s,f)=>s+(parseFloat(f.kg)||0),0);
+  const days30Cost=days30.reduce((s,f)=>s+(parseFloat(f.cost)||0),0);
+  const days30Cpk=days30Kg>0?Math.round(days30Cost/days30Kg):0;
+
+  // Cost per pig per day
+  const costPerPigDay=active.length>0&&logDays>0?Math.round(totalCost/logDays/active.length):0;
+
+  // Detect overfeeding/underfeeding
+  const overFed=effPct!==null&&effPct>120;
+  const underFed=effPct!==null&&effPct<75;
+
+  // Monthly cost trend
+  const monthMap={};
+  feeds.forEach(f=>{
+    const m=(f.date||"").slice(0,7);
+    if(!m)return;
+    if(!monthMap[m])monthMap[m]={kg:0,cost:0};
+    monthMap[m].kg+=parseFloat(f.kg)||0;
+    monthMap[m].cost+=parseFloat(f.cost)||0;
+  });
+  const months=Object.entries(monthMap).sort((a,b)=>b[0].localeCompare(a[0])).slice(0,6);
+  const maxCost=Math.max(...months.map(([,v])=>v.cost),1);
+
+  return(<div className="fade-in">
+    <div style={S.h1}>🌾 Feed Efficiency</div>
+    <div style={S.sub}>Actual vs expected · Cost trends · Waste detection · Per-pig analysis</div>
+
+    {/* Alert banner */}
+    {(overFed||underFed)&&<div style={{padding:"11px 16px",background:overFed?"rgba(245,158,11,.08)":"rgba(239,68,68,.08)",border:"1.5px solid "+(overFed?"rgba(245,158,11,.4)":"rgba(239,68,68,.4)"),borderRadius:10,marginBottom:14,fontSize:13,color:overFed?C.amber:C.red}}>
+      {overFed?"⚠️ Overfeeding detected! Actual feed is "+effPct+"% of target — review portions to reduce waste and costs.":"🔴 Underfeeding alert! Actual feed is only "+effPct+"% of target — pigs may not be getting enough nutrition."}
+    </div>}
+
+    {/* KPI row */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:10,marginBottom:16}}>
+      {[
+        {l:"Feed Efficiency",v:effPct!==null?effPct+"%":"—",c:effColor},
+        {l:"Actual/Day",v:actualDaily+"kg",c:C.text},
+        {l:"Expected/Day",v:Math.round(expectedDaily*10)/10+"kg",c:C.muted},
+        {l:"Avg Cost/kg",v:"RWF "+fmtNum(avgCpk),c:C.amber},
+        {l:"Cost/Pig/Day",v:fmtRWF(costPerPigDay),c:C.blue},
+        {l:"Last 30d Cost",v:fmtRWF(days30Cost),c:C.red},
+      ].map(s=>(
+        <div key={s.l} style={S.stat}>
+          <div style={S.sl}>{s.l}</div>
+          <div style={{...S.sv,color:s.c,fontSize:s.v.length>9?13:20}}>{s.v}</div>
+        </div>
+      ))}
+    </div>
+
+    {/* Efficiency bar */}
+    {effPct!==null&&<div style={{...S.card,padding:"13px 16px",marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+        <span style={{fontSize:13,fontWeight:700,color:C.text}}>📊 Feed Efficiency Meter</span>
+        <span style={{fontSize:13,fontWeight:700,color:effColor}}>{effPct}% of target</span>
+      </div>
+      <div style={{height:14,background:C.elevated,borderRadius:8,overflow:"hidden",marginBottom:6,position:"relative"}}>
+        <div style={{position:"absolute",left:"75%",top:0,bottom:0,width:1,background:"rgba(239,68,68,.4)",zIndex:1}}/>
+        <div style={{position:"absolute",left:"90%",top:0,bottom:0,width:1,background:C.accent+"66",zIndex:1}}/>
+        <div style={{position:"absolute",left:"115%",top:0,bottom:0,width:1,background:"rgba(245,158,11,.4)",zIndex:1}}/>
+        <div style={{height:"100%",width:Math.min(effPct,140)+"%",background:effColor,borderRadius:8,transition:"width .5s"}}/>
+      </div>
+      <div style={{display:"flex",gap:16,fontSize:10,color:C.faint}}>
+        <span style={{color:C.red}}>▲ 75% min</span>
+        <span style={{color:C.accent}}>▲ 90–115% ideal</span>
+        <span style={{color:C.amber}}>▲ 120%+ overfeeding</span>
+      </div>
+    </div>}
+
+    {/* Tabs */}
+    <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border,flexWrap:"wrap"}}>
+      {[["overview","📊 By Stage"],["type","🌾 By Feed Type"],["trend","📅 Monthly Trend"],["pigs","🐷 Per Pig"]].map(([t,l])=>(
+        <button key={t} style={S.tab(tab===t)} onClick={()=>setTab(t)}>{l}</button>
+      ))}
+    </div>
+
+    {/* BY STAGE */}
+    {tab==="overview"&&<div>
+      {Object.keys(byStage).length===0&&<div style={{...S.card,color:C.faint,fontSize:13}}>No active pigs. Add pigs to see stage analysis.</div>}
+      {Object.entries(byStage).map(([stage,data])=>{
+        const expD=Math.round(data.expected*10)/10;
+        return(<div key={stage} style={{...S.card,marginBottom:10,borderLeft:"3px solid "+C.accent}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <div>
+              <div style={{fontWeight:700,fontSize:14,color:C.text}}>{stage}</div>
+              <div style={{fontSize:11,color:C.faint}}>{data.count} pig{data.count>1?"s":""} · {expD}kg/day total expected</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:12,color:C.muted}}>Standard: {STAGE_FEED[stage]||2}kg/pig/day</div>
+              <div style={{fontSize:12,color:C.accent,fontWeight:700}}>Expected: {expD}kg/day</div>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {data.pigs.map(p=>(
+              <div key={p.id} style={{background:C.elevated,borderRadius:7,padding:"6px 10px",fontSize:11,border:"1px solid "+C.border}}>
+                <div style={{fontWeight:600,color:C.text}}>{p.tag}</div>
+                <div style={{color:C.faint,marginTop:2}}>{p.weight}kg · {STAGE_FEED[p.stage]||2}kg feed/day</div>
+              </div>
+            ))}
+          </div>
+        </div>);
+      })}
+      {active.length>0&&<div style={{...S.card,background:"rgba(22,163,74,.04)",border:"1px solid rgba(22,163,74,.2)"}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:8}}>📐 Total Herd Feed Budget</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,fontSize:12}}>
+          {[
+            ["Expected/day",Math.round(expectedDaily*10)/10+"kg"],
+            ["Expected/month",Math.round(expectedDaily*30)+"kg"],
+            ["Est. monthly cost",fmtRWF(Math.round(expectedDaily*30*avgCpk))],
+          ].map(([l,v])=>(<div key={l} style={{background:C.surface,borderRadius:7,padding:"8px 10px",textAlign:"center",border:"1px solid "+C.border}}>
+            <div style={{color:C.faint,fontSize:10}}>{l}</div>
+            <div style={{fontWeight:700,color:C.text,marginTop:3}}>{v}</div>
+          </div>))}
+        </div>
+      </div>}
+    </div>}
+
+    {/* BY FEED TYPE */}
+    {tab==="type"&&<div>
+      {Object.keys(byType).length===0&&<div style={{...S.card,color:C.faint,fontSize:13}}>No feed records yet.</div>}
+      {Object.entries(byType).sort((a,b)=>b[1].cost-a[1].cost).map(([type,data])=>{
+        const cpk=data.kg>0?Math.round(data.cost/data.kg):0;
+        const ref=FEED_REF[type]||0;
+        const pct=totalCost>0?((data.cost/totalCost)*100).toFixed(1):0;
+        const expensive=ref>0&&cpk>ref*1.25;
+        const cheap=ref>0&&cpk<ref*0.75;
+        return(<div key={type} style={{...S.card,marginBottom:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+            <div>
+              <div style={{fontWeight:700,color:C.text,fontSize:14}}>🌾 {type}</div>
+              <div style={{fontSize:11,color:C.faint}}>{data.count} sessions · {Math.round(data.kg*10)/10}kg total</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontWeight:700,color:C.amber}}>{fmtRWF(data.cost)}</div>
+              <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:"rgba(245,158,11,.1)",color:C.amber}}>{pct}% of feed budget</span>
+            </div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,fontSize:12,marginBottom:8}}>
+            {[["Avg Cost/kg","RWF "+fmtNum(cpk)],["Ref Price","RWF "+fmtNum(ref)||"N/A"],["vs Reference",ref>0?(cpk>ref?"+":"")+(cpk-ref)+" RWF/kg":"—"]].map(([l,v])=>(
+              <div key={l} style={{background:C.elevated,borderRadius:7,padding:"7px 10px",textAlign:"center"}}>
+                <div style={{color:C.faint,fontSize:10}}>{l}</div>
+                <div style={{fontWeight:700,color:l==="vs Reference"?(expensive?C.red:cheap?C.accent:C.text):C.text,marginTop:2}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          {expensive&&<div style={{fontSize:11,color:C.red,padding:"6px 10px",background:"rgba(239,68,68,.06)",borderRadius:6}}>⚠️ Price is 25%+ above reference — consider alternative suppliers</div>}
+          {cheap&&<div style={{fontSize:11,color:C.accent,padding:"6px 10px",background:"rgba(22,163,74,.06)",borderRadius:6}}>✅ Good price — {Math.round((1-cpk/ref)*100)}% below reference</div>}
+          <div style={{height:5,background:C.elevated,borderRadius:3,overflow:"hidden",marginTop:8}}>
+            <div style={{height:"100%",width:pct+"%",background:C.amber,borderRadius:3}}/>
+          </div>
+        </div>);
+      })}
+    </div>}
+
+    {/* MONTHLY TREND */}
+    {tab==="trend"&&<div>
+      {months.length===0&&<div style={{...S.card,color:C.faint,fontSize:13}}>No feed data yet.</div>}
+      {months.map(([m,data])=>{
+        const cpk=data.kg>0?Math.round(data.cost/data.kg):0;
+        const label=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(m.split("-")[1])-1]+" "+m.split("-")[0].slice(2);
+        return(<div key={m} style={{...S.card,marginBottom:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+            <span style={{fontWeight:700,color:C.text}}>{label}</span>
+            <span style={{color:C.amber,fontWeight:700}}>{fmtRWF(data.cost)}</span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,fontSize:12,marginBottom:6}}>
+            {[["Feed (kg)",Math.round(data.kg*10)/10+"kg"],["Total Cost",fmtRWF(data.cost)],["Avg/kg","RWF "+fmtNum(cpk)]].map(([l,v])=>(
+              <div key={l} style={{background:C.elevated,borderRadius:6,padding:"6px 8px",textAlign:"center"}}>
+                <div style={{color:C.faint,fontSize:10}}>{l}</div>
+                <div style={{fontWeight:700,color:C.text,marginTop:2}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{height:6,background:C.elevated,borderRadius:3,overflow:"hidden"}}>
+            <div style={{height:"100%",width:(data.cost/maxCost*100)+"%",background:C.amber,borderRadius:3,transition:"width .5s"}}/>
+          </div>
+        </div>);
+      })}
+    </div>}
+
+    {/* PER PIG */}
+    {tab==="pigs"&&<div>
+      {active.length===0&&<div style={{...S.card,color:C.faint,fontSize:13}}>No active pigs.</div>}
+      {active.map(p=>{
+        const pigFeeds=feeds.filter(f=>f.pigId===p.id);
+        const pigKg=pigFeeds.reduce((s,f)=>s+(parseFloat(f.kg)||0),0);
+        const pigCost=pigFeeds.reduce((s,f)=>s+(parseFloat(f.cost)||0),0);
+        const pigDays=pigFeeds.length>0?new Set(pigFeeds.map(f=>f.date)).size:0;
+        const pigCpk=pigKg>0?Math.round(pigCost/pigKg):0;
+        const stdFeed=STAGE_FEED[p.stage]||2.0;
+        return(<div key={p.id} style={{...S.card,marginBottom:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <div>
+              <div style={{fontWeight:700,fontSize:14,color:C.text}}>🐷 {p.tag}</div>
+              <div style={{fontSize:11,color:C.faint}}>{p.stage} · {p.weight}kg · {p.breed}</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:12,color:C.accent,fontWeight:700}}>Standard: {stdFeed}kg/day</div>
+              {pigDays>0&&<div style={{fontSize:11,color:C.muted}}>Recorded: {pigDays} days</div>}
+            </div>
+          </div>
+          {pigDays>0?(
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,fontSize:12}}>
+              {[["Total Feed",Math.round(pigKg*10)/10+"kg"],["Total Cost",fmtRWF(pigCost)],["Avg/kg","RWF "+fmtNum(pigCpk)],["Avg/day",(pigDays>0?Math.round(pigKg/pigDays*10)/10:0)+"kg"]].map(([l,v])=>(
+                <div key={l} style={{background:C.elevated,borderRadius:7,padding:"6px 8px",textAlign:"center"}}>
+                  <div style={{color:C.faint,fontSize:10}}>{l}</div>
+                  <div style={{fontWeight:700,color:C.text,marginTop:2}}>{v}</div>
+                </div>
+              ))}
+            </div>
+          ):<div style={{fontSize:12,color:C.faint,textAlign:"center",padding:"8px 0"}}>No individual feed logs for this pig. Feeds logged as "All pigs" are not counted per-pig.</div>}
+        </div>);
+      })}
+    </div>}
+  </div>);
+}
+
+/* ═══════════════════════════════════════════════════
+   PIG PERFORMANCE MODULE
+   Individual weight tracking, ADG, market readiness
+═══════════════════════════════════════════════════ */
+function PigPerformance({pigs,logs,feeds,sales,expenses,incomes}){
+  const [sortBy,setSortBy]=useState("weight");
+  const [filterStage,setFilterStage]=useState("");
+  const active=pigs.filter(p=>p.status==="active");
+  const STAGE_FEED={Piglet:0.5,Weaner:1.0,Grower:1.8,Finisher:2.8,Gilt:2.2,Sow:2.5,Boar:2.0};
+  const MARKET_WEIGHTS={Piglet:10,Weaner:25,Grower:50,Finisher:80,Gilt:80,Sow:100,Boar:100};
+
+  // ADG estimate: assume ~0.5kg/day average for finishers, scale by stage
+  const ADG_BY_STAGE={Piglet:0.2,Weaner:0.35,Grower:0.5,Finisher:0.65,Gilt:0.4,Sow:0.1,Boar:0.1};
+
+  function daysToMarket(pig){
+    const mw=80; // market weight
+    if(pig.weight>=mw)return 0;
+    const adg=ADG_BY_STAGE[pig.stage]||0.5;
+    return Math.round((mw-pig.weight)/adg);
+  }
+  function projectedMarketDate(pig){
+    const d=daysToMarket(pig);
+    if(d===0)return "Ready now!";
+    const dt=new Date();
+    dt.setDate(dt.getDate()+d);
+    return dt.toISOString().slice(0,10);
+  }
+  function marketReadiness(pig){
+    if(pig.weight>=80)return{label:"✅ Market Ready",color:C.accent,pct:100};
+    const mw=80;
+    const pct=Math.round((pig.weight/mw)*100);
+    if(pct>=75)return{label:"⏰ Almost Ready",color:C.amber,pct};
+    return{label:"🌱 Growing",color:C.blue,pct};
+  }
+  function performanceScore(pig){
+    // Score based on weight for stage, health (from logs), feed efficiency
+    const stageMidWeights={Piglet:7,Weaner:18,Grower:38,Finisher:65,Gilt:70,Sow:120,Boar:140};
+    const mid=stageMidWeights[pig.stage]||40;
+    const weightScore=Math.min(100,Math.round((pig.weight/mid)*60));
+    const pigLogs=logs.filter(l=>l.date===toDay()&&l.sick>0);
+    const healthScore=pigLogs.length===0?30:15;
+    return Math.min(100,weightScore+healthScore);
+  }
+
+  const stages=[...new Set(active.map(p=>p.stage))];
+  let filtered=filterStage?active.filter(p=>p.stage===filterStage):active;
+  filtered=[...filtered].sort((a,b)=>{
+    if(sortBy==="weight")return b.weight-a.weight;
+    if(sortBy==="ready")return daysToMarket(a)-daysToMarket(b);
+    if(sortBy==="value")return getMarketPrice(b.stage,b.weight)-getMarketPrice(a.stage,a.weight);
+    return 0;
+  });
+
+  const readyNow=active.filter(p=>p.weight>=80);
+  const almostReady=active.filter(p=>p.weight>=65&&p.weight<80);
+  const totalHerdValue=active.reduce((s,p)=>s+getMarketPrice(p.stage,p.weight),0);
+  const avgWeight=active.length>0?Math.round(active.reduce((s,p)=>s+(p.weight||0),0)/active.length):0;
+
+  return(<div className="fade-in">
+    <div style={S.h1}>📈 Pig Performance</div>
+    <div style={S.sub}>Individual tracking · Weight progress · Market readiness · ADG forecast</div>
+
+    {/* KPIs */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:10,marginBottom:16}}>
+      {[
+        {l:"Market Ready",v:readyNow.length+" pigs",c:C.accent},
+        {l:"Almost Ready",v:almostReady.length+" pigs",c:C.amber},
+        {l:"Avg Herd Weight",v:avgWeight+"kg",c:C.blue},
+        {l:"Total Herd Value",v:fmtRWF(totalHerdValue),c:C.purple},
+      ].map(s=>(
+        <div key={s.l} style={S.stat}>
+          <div style={S.sl}>{s.l}</div>
+          <div style={{...S.sv,color:s.c,fontSize:s.v.length>10?13:20}}>{s.v}</div>
+        </div>
+      ))}
+    </div>
+
+    {readyNow.length>0&&<div style={{padding:"11px 16px",background:"rgba(22,163,74,.08)",border:"1.5px solid rgba(22,163,74,.35)",borderRadius:10,marginBottom:14,fontSize:13,color:C.accent,fontWeight:600}}>
+      🏷️ {readyNow.length} pig{readyNow.length>1?"s":""} are ready to sell now — potential revenue: {fmtRWF(readyNow.reduce((s,p)=>s+getMarketPrice(p.stage,p.weight),0))}
+    </div>}
+
+    {/* Filters */}
+    <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+      <select value={filterStage} onChange={e=>setFilterStage(e.target.value)} style={{...S.inp,width:"auto",fontSize:12,padding:"7px 11px"}}>
+        <option value="">All Stages</option>
+        {stages.map(s=><option key={s}>{s}</option>)}
+      </select>
+      <select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={{...S.inp,width:"auto",fontSize:12,padding:"7px 11px"}}>
+        <option value="weight">Sort: Heaviest first</option>
+        <option value="ready">Sort: Soonest to market</option>
+        <option value="value">Sort: Highest value</option>
+      </select>
+      <span style={{fontSize:12,color:C.faint}}>{filtered.length} pig{filtered.length!==1?"s":""}</span>
+    </div>
+
+    {/* Pig cards */}
+    {filtered.length===0&&<div style={{...S.card,color:C.faint,fontSize:13}}>No pigs match the filter.</div>}
+    {filtered.map(pig=>{
+      const r=marketReadiness(pig);
+      const dtm=daysToMarket(pig);
+      const pmd=projectedMarketDate(pig);
+      const val=getMarketPrice(pig.stage,pig.weight);
+      const adg=ADG_BY_STAGE[pig.stage]||0.5;
+      const score=performanceScore(pig);
+      const scoreColor=score>=70?C.accent:score>=45?C.amber:C.red;
+      return(<div key={pig.id} style={{...S.card,marginBottom:12,borderLeft:"3px solid "+r.color}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10,flexWrap:"wrap",gap:8}}>
+          <div>
+            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <span style={{fontWeight:700,fontSize:15,color:C.text}}>🐷 {pig.tag}</span>
+              <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:r.color+"18",color:r.color,fontWeight:700}}>{r.label}</span>
+            </div>
+            <div style={{fontSize:11,color:C.faint,marginTop:3}}>{pig.breed} · {pig.gender} · {pig.stage}</div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontWeight:800,fontSize:16,color:C.purple}}>{fmtRWF(val)}</div>
+            <div style={{fontSize:11,color:C.faint}}>Market value</div>
+          </div>
+        </div>
+
+        {/* Weight progress bar */}
+        <div style={{marginBottom:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:4}}>
+            <span style={{color:C.muted}}>Weight progress to market (80kg)</span>
+            <span style={{color:r.color,fontWeight:700}}>{pig.weight}kg / 80kg</span>
+          </div>
+          <div style={{height:10,background:C.elevated,borderRadius:6,overflow:"hidden"}}>
+            <div style={{height:"100%",width:Math.min(r.pct,100)+"%",background:r.pct>=100?"linear-gradient(90deg,#16a34a,#10b981)":r.pct>=75?"linear-gradient(90deg,#f59e0b,#d97706)":"linear-gradient(90deg,#3b82f6,#2563eb)",borderRadius:6,transition:"width .5s"}}/>
+          </div>
+        </div>
+
+        {/* Stats grid */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,fontSize:11,marginBottom:10}}>
+          {[
+            ["Current Weight",pig.weight+"kg"],
+            ["ADG Estimate",adg+"kg/day"],
+            ["Days to Market",dtm===0?"Ready!":dtm+" days"],
+            ["Market Date",dtm===0?"Now":pmd],
+          ].map(([l,v])=>(
+            <div key={l} style={{background:C.elevated,borderRadius:6,padding:"6px 8px",textAlign:"center"}}>
+              <div style={{color:C.faint,fontSize:9,marginBottom:2}}>{l}</div>
+              <div style={{fontWeight:700,color:l==="Days to Market"&&dtm===0?C.accent:C.text,fontSize:11}}>{v}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Performance score */}
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{flex:1,height:5,background:C.elevated,borderRadius:3,overflow:"hidden"}}>
+            <div style={{height:"100%",width:score+"%",background:scoreColor,borderRadius:3,transition:"width .5s"}}/>
+          </div>
+          <span style={{fontSize:11,color:scoreColor,fontWeight:700,whiteSpace:"nowrap"}}>Score: {score}/100</span>
+        </div>
+      </div>);
+    })}
+  </div>);
+}
+
+/* ═══════════════════════════════════════════════════
+   SMART ALERTS MODULE
+   Consolidates all farm alerts in one place
+═══════════════════════════════════════════════════ */
+function SmartAlerts({pigs,feeds,logs,sales,expenses,incomes,reproductions,stock,users,tasks,vaccinations,capital,setPage}){
+  const active=pigs.filter(p=>p.status==="active");
+  const today=toDay();
+
+  // Build all alerts
+  const alerts=[];
+
+  // Market ready pigs
+  const ready=active.filter(p=>p.weight>=80);
+  if(ready.length>0) alerts.push({
+    cat:"💰 Sales",priority:1,color:"#16a34a",
+    title:`${ready.length} pig${ready.length>1?"s":""} market-ready (80kg+)`,
+    body:`Potential revenue: ${fmtRWF(ready.reduce((s,p)=>s+getMarketPrice(p.stage,p.weight),0))}`,
+    action:()=>setPage&&setPage("performance")
+  });
+
+  // Almost ready
+  const almost=active.filter(p=>p.weight>=65&&p.weight<80);
+  if(almost.length>0) alerts.push({
+    cat:"📈 Growth",priority:2,color:C.amber,
+    title:`${almost.length} pig${almost.length>1?"s":""} almost at market weight (65–79kg)`,
+    body:"Start preparing buyers and transport",
+    action:null
+  });
+
+  // Low stock
+  const lowStock=(stock||[]).filter(s=>s.quantity<=s.minLevel);
+  if(lowStock.length>0) alerts.push({
+    cat:"📦 Stock",priority:1,color:C.red,
+    title:`Low stock: ${lowStock.map(s=>s.name).join(", ")}`,
+    body:`${lowStock.length} item${lowStock.length>1?"s":""} below minimum level`,
+    action:()=>setPage&&setPage("stock")
+  });
+
+  // Reproduction — overdue
+  const overdue=(reproductions||[]).filter(r=>r.status==="pregnant"&&daysDiff(r.expectedFarrow)<0);
+  overdue.forEach(r=>{
+    const sow=pigs.find(p=>p.id===r.sowId);
+    alerts.push({
+      cat:"🐖 Breeding",priority:0,color:C.red,
+      title:`🚨 OVERDUE: ${sow?sow.tag:"Sow"} is ${Math.abs(daysDiff(r.expectedFarrow))} day(s) overdue!`,
+      body:"Check immediately — may need veterinary assistance",
+      action:()=>setPage&&setPage("reproduction")
+    });
+  });
+
+  // Farrowing soon
+  const farrowSoon=(reproductions||[]).filter(r=>r.status==="pregnant"&&daysDiff(r.expectedFarrow)>=0&&daysDiff(r.expectedFarrow)<=7);
+  if(farrowSoon.length>0) alerts.push({
+    cat:"🐖 Breeding",priority:1,color:C.purple,
+    title:`${farrowSoon.length} sow${farrowSoon.length>1?"s":""} due to farrow within 7 days`,
+    body:"Prepare farrowing pens, bedding, and heat lamps",
+    action:()=>setPage&&setPage("reproduction")
+  });
+
+  // Sick pigs from today's logs
+  const todayLogs=logs.filter(l=>l.date===today&&l.sick>0);
+  if(todayLogs.length>0){
+    const totalSick=todayLogs.reduce((s,l)=>s+(l.sick||0),0);
+    alerts.push({
+      cat:"🏥 Health",priority:0,color:C.red,
+      title:`${totalSick} sick pig${totalSick>1?"s":""} reported today`,
+      body:"Review health logs and contact vet if needed",
+      action:()=>setPage&&setPage("daylogs")
+    });
+  }
+
+  // Deaths this week
+  const weekAgo=new Date();weekAgo.setDate(weekAgo.getDate()-7);
+  const recentDeaths=logs.filter(l=>{
+    if(!l.date||l.deaths<=0)return false;
+    return new Date(l.date)>=weekAgo;
+  });
+  if(recentDeaths.length>0){
+    const total=recentDeaths.reduce((s,l)=>s+(l.deaths||0),0);
+    alerts.push({
+      cat:"🏥 Health",priority:1,color:C.red,
+      title:`${total} death${total>1?"s":""} recorded this week`,
+      body:"Review cause — consider vaccination or biosecurity review",
+      action:null
+    });
+  }
+
+  // No daily log today
+  const todayLogExists=logs.some(l=>l.date===today);
+  if(!todayLogExists) alerts.push({
+    cat:"📋 Operations",priority:2,color:C.amber,
+    title:"No daily log submitted today",
+    body:"Remind workers to submit their daily health check report",
+    action:()=>setPage&&setPage("adminlog")
+  });
+
+  // Pending worker approvals
+  const pending=users.filter(u=>u.role==="worker"&&!u.approved);
+  if(pending.length>0) alerts.push({
+    cat:"👷 Workers",priority:2,color:C.blue,
+    title:`${pending.length} worker registration${pending.length>1?"s":""} awaiting approval`,
+    body:pending.map(u=>u.name).join(", "),
+    action:()=>setPage&&setPage("workers")
+  });
+
+  // Pending data approvals
+  const pendingData=[...feeds,...logs,...sales,...expenses].filter(x=>x.approved===false);
+  if(pendingData.length>0) alerts.push({
+    cat:"✅ Approvals",priority:1,color:C.amber,
+    title:`${pendingData.length} worker record${pendingData.length>1?"s":""} awaiting approval`,
+    body:"Worker-submitted data needs admin review",
+    action:()=>setPage&&setPage("approvals")
+  });
+
+  // Overdue vaccinations
+  if(vaccinations){
+    const overdueVax=vaccinations.filter(v=>daysDiff(v.nextDue)<0);
+    const dueVax=vaccinations.filter(v=>daysDiff(v.nextDue)>=0&&daysDiff(v.nextDue)<=7);
+    if(overdueVax.length>0) alerts.push({
+      cat:"💉 Vaccines",priority:1,color:C.red,
+      title:`${overdueVax.length} overdue vaccination${overdueVax.length>1?"s":""}`,
+      body:"Overdue vaccines increase disease risk",
+      action:()=>setPage&&setPage("vaccination")
+    });
+    if(dueVax.length>0) alerts.push({
+      cat:"💉 Vaccines",priority:2,color:C.amber,
+      title:`${dueVax.length} vaccination${dueVax.length>1?"s":""} due within 7 days`,
+      body:"Schedule vet visit to keep herd protected",
+      action:()=>setPage&&setPage("vaccination")
+    });
+  }
+
+  // Financial: running at loss
+  const totalInc=sales.reduce((s,l)=>s+(l.total||0),0)+incomes.reduce((s,l)=>s+(l.amount||0),0);
+  const totalExp=feeds.reduce((s,l)=>s+(l.cost||0),0)+expenses.reduce((s,l)=>s+(l.amount||0),0);
+  if(totalInc>0&&totalExp>totalInc*1.1) alerts.push({
+    cat:"💹 Finance",priority:1,color:C.red,
+    title:"Farm is running at a loss",
+    body:`Expenses (${fmtRWF(totalExp)}) exceed income (${fmtRWF(totalInc)}) by ${fmtRWF(totalExp-totalInc)}`,
+    action:()=>setPage&&setPage("pnl")
+  });
+
+  // Overdue tasks
+  if(tasks&&tasks.length>0){
+    const overdueT=tasks.filter(t=>t.status==="pending"&&t.dueDate&&daysDiff(t.dueDate)<0);
+    if(overdueT.length>0) alerts.push({
+      cat:"✅ Tasks",priority:2,color:C.amber,
+      title:`${overdueT.length} overdue task${overdueT.length>1?"s":""}`,
+      body:overdueT.slice(0,3).map(t=>t.title).join(", "),
+      action:()=>setPage&&setPage("tasks")
+    });
+  }
+
+  // All good
+  if(alerts.length===0) alerts.push({
+    cat:"✅ All Good",priority:3,color:C.accent,
+    title:"No urgent alerts today!",
+    body:"Farm is running smoothly. Keep up the great work!",
+    action:null
+  });
+
+  // Sort by priority (0=critical, 1=high, 2=medium, 3=info)
+  alerts.sort((a,b)=>a.priority-b.priority);
+
+  const critCount=alerts.filter(a=>a.priority===0).length;
+  const highCount=alerts.filter(a=>a.priority===1).length;
+
+  const priorityLabel=["🚨 CRITICAL","🔴 High","🟡 Medium","🟢 Info"];
+  const priorityBg=["rgba(239,68,68,.06)","rgba(239,68,68,.04)","rgba(245,158,11,.04)","rgba(22,163,74,.04)"];
+
+  return(<div className="fade-in">
+    <div style={S.h1}>🔔 Smart Alerts</div>
+    <div style={S.sub}>All farm alerts in one place · {alerts.length} alert{alerts.length!==1?"s":""} · {critCount>0?critCount+" critical":"No critical issues"}</div>
+
+    {/* Summary */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
+      {[
+        {l:"Critical",v:critCount,c:C.red,bg:"rgba(239,68,68,.06)"},
+        {l:"High Priority",v:highCount,c:C.amber,bg:"rgba(245,158,11,.06)"},
+        {l:"Medium",v:alerts.filter(a=>a.priority===2).length,c:C.blue,bg:"rgba(37,99,235,.06)"},
+        {l:"Total Alerts",v:alerts.length,c:C.text,bg:C.elevated},
+      ].map(s=>(
+        <div key={s.l} style={{background:s.bg,border:"1px solid "+C.border,borderRadius:10,padding:"12px 14px",textAlign:"center"}}>
+          <div style={{fontSize:10,color:C.faint,textTransform:"uppercase",marginBottom:4}}>{s.l}</div>
+          <div style={{fontSize:22,fontWeight:800,color:s.c}}>{s.v}</div>
+        </div>
+      ))}
+    </div>
+
+    {/* Alert list */}
+    {alerts.map((a,i)=>(
+      <div key={i} className="fade-in" style={{
+        ...S.card,marginBottom:10,
+        borderLeft:"4px solid "+a.color,
+        background:priorityBg[a.priority]||C.surface,
+        animation:`fadeIn ${.2+i*.05}s ease both`
+      }}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
+          <div style={{flex:1}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+              <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:a.color+"18",color:a.color,fontWeight:700}}>{a.cat}</span>
+              <span style={{fontSize:9,padding:"2px 6px",borderRadius:20,background:C.elevated,color:C.faint,fontWeight:600}}>{priorityLabel[a.priority]}</span>
+            </div>
+            <div style={{fontWeight:700,fontSize:13,color:C.text,marginBottom:3}}>{a.title}</div>
+            <div style={{fontSize:12,color:C.muted}}>{a.body}</div>
+          </div>
+          {a.action&&<button onClick={a.action} style={{padding:"6px 13px",borderRadius:8,border:"1px solid "+a.color+"44",background:a.color+"12",color:a.color,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",flexShrink:0}}>View →</button>}
+        </div>
+      </div>
+    ))}
+  </div>);
+}
+
+/* ═══════════════════════════════════════════════════
+   PROFIT INSIGHT MODULE
+   Quick profit dashboard, trends, cost drilldown
+═══════════════════════════════════════════════════ */
+function ProfitInsight({pigs,feeds,sales,logs,expenses,incomes,reproductions,stock,capital}){
+  const [period,setPeriod]=useState("thisMonth");
+  const active=pigs.filter(p=>p.status==="active");
+
+  function filterByPeriod(arr,dateKey="date"){
+    const now=new Date();
+    const thisY=now.getFullYear();
+    const thisM=now.getMonth();
+    return arr.filter(x=>{
+      if(!x[dateKey])return false;
+      const d=new Date(x[dateKey]);
+      if(period==="thisMonth")return d.getFullYear()===thisY&&d.getMonth()===thisM;
+      if(period==="lastMonth"){const lm=thisM===0?11:thisM-1;const ly=thisM===0?thisY-1:thisY;return d.getFullYear()===ly&&d.getMonth()===lm;}
+      if(period==="last30")return (now-d)/(1000*60*60*24)<=30;
+      if(period==="thisYear")return d.getFullYear()===thisY;
+      return true; // all
+    });
+  }
+
+  const fSales=filterByPeriod(sales);
+  const fFeeds=filterByPeriod(feeds);
+  const fExp=filterByPeriod(expenses);
+  const fInc=filterByPeriod(incomes);
+
+  const totalInc=fSales.reduce((s,x)=>s+(x.total||0),0)+fInc.reduce((s,x)=>s+(x.amount||0),0);
+  const totalExp=fFeeds.reduce((s,x)=>s+(x.cost||0),0)+fExp.reduce((s,x)=>s+(x.amount||0),0);
+  const profit=totalInc-totalExp;
+  const margin=totalInc>0?((profit/totalInc)*100).toFixed(1):"0";
+  const herdValue=active.reduce((s,p)=>s+getMarketPrice(p.stage,p.weight),0);
+
+  // All-time for context
+  const allInc=sales.reduce((s,x)=>s+(x.total||0),0)+incomes.reduce((s,x)=>s+(x.amount||0),0);
+  const allExp=feeds.reduce((s,x)=>s+(x.cost||0),0)+expenses.reduce((s,x)=>s+(x.amount||0),0);
+  const allProfit=allInc-allExp;
+
+  // Top selling pigs
+  const salePigs=sales.map(s=>{
+    const p=pigs.find(x=>x.id===s.pigId);
+    return{...s,pigTag:p?p.tag:"Unknown",pigStage:p?p.stage:"Unknown"};
+  }).sort((a,b)=>(b.total||0)-(a.total||0)).slice(0,5);
+
+  // Cost breakdown for period
+  const expByCat={};
+  fFeeds.forEach(f=>{expByCat["Feed Purchase"]=(expByCat["Feed Purchase"]||0)+(f.cost||0);});
+  fExp.forEach(e=>{expByCat[e.category]=(expByCat[e.category]||0)+(e.amount||0);});
+  const topCosts=Object.entries(expByCat).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+  // Monthly profit for spark bars
+  const monthlyProfit={};
+  [...sales.map(s=>({d:s.date,inc:s.total||0,exp:0})),...incomes.map(i=>({d:i.date,inc:i.amount||0,exp:0})),...feeds.map(f=>({d:f.date,inc:0,exp:f.cost||0})),...expenses.map(e=>({d:e.date,inc:0,exp:e.amount||0}))].forEach(x=>{
+    const m=(x.d||"").slice(0,7);
+    if(!m)return;
+    if(!monthlyProfit[m])monthlyProfit[m]={inc:0,exp:0};
+    monthlyProfit[m].inc+=x.inc;
+    monthlyProfit[m].exp+=x.exp;
+  });
+  const months6=Object.entries(monthlyProfit).sort((a,b)=>b[0].localeCompare(a[0])).slice(0,6).reverse();
+  const maxMonthP=Math.max(...months6.map(([,v])=>Math.max(Math.abs(v.inc-v.exp),1)),1);
+
+  // Break-even
+  const avgSalePig=fSales.length>0?Math.round(fSales.reduce((s,x)=>s+(x.total||0),0)/fSales.length):0;
+  const avgCostPig=fSales.length>0?Math.round(totalExp/Math.max(fSales.length,1)):0;
+  const breakEven=avgSalePig>avgCostPig?Math.ceil(totalExp/(avgSalePig-avgCostPig)):null;
+
+  return(<div className="fade-in">
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14,flexWrap:"wrap",gap:10}}>
+      <div>
+        <div style={S.h1}>💡 Profit Insight</div>
+        <div style={S.sub}>Quick profit view · Cost drilldown · Monthly trends · Break-even</div>
+      </div>
+      <select value={period} onChange={e=>setPeriod(e.target.value)} style={{...S.inp,width:"auto",fontSize:12,padding:"7px 11px"}}>
+        {[["thisMonth","This Month"],["lastMonth","Last Month"],["last30","Last 30 Days"],["thisYear","This Year"],["all","All Time"]].map(([v,l])=><option key={v} value={v}>{l}</option>)}
+      </select>
+    </div>
+
+    {/* Main P&L banner */}
+    <div style={{...S.card,background:profit>=0?"linear-gradient(135deg,rgba(22,163,74,.08),rgba(16,185,129,.04))":"linear-gradient(135deg,rgba(239,68,68,.08),rgba(220,38,38,.04))",border:"2px solid "+(profit>=0?"rgba(22,163,74,.25)":"rgba(239,68,68,.25)"),marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}>
+        <div>
+          <div style={{fontSize:11,color:C.faint,textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>Net Profit / Loss</div>
+          <div style={{fontSize:32,fontWeight:800,color:profit>=0?C.accent:C.red}}>{profit>=0?"+":""}{fmtRWF(profit)}</div>
+          <div style={{fontSize:13,color:C.muted,marginTop:4}}>
+            {profit>=0?"✅ Profitable":"⚠️ Loss"} · {margin}% margin · {fSales.length} sale{fSales.length!==1?"s":""}
+          </div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:8,minWidth:160}}>
+          <div style={{display:"flex",justifyContent:"space-between",gap:16}}>
+            <span style={{fontSize:12,color:C.muted}}>Income</span>
+            <span style={{fontWeight:700,color:"#10b981"}}>{fmtRWF(totalInc)}</span>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",gap:16}}>
+            <span style={{fontSize:12,color:C.muted}}>Expenses</span>
+            <span style={{fontWeight:700,color:C.red}}>{fmtRWF(totalExp)}</span>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",gap:16,paddingTop:6,borderTop:"1px solid "+C.border}}>
+            <span style={{fontSize:12,color:C.muted}}>Herd Value</span>
+            <span style={{fontWeight:700,color:C.purple}}>{fmtRWF(herdValue)}</span>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",gap:16}}>
+            <span style={{fontSize:12,color:C.muted}}>All-time Profit</span>
+            <span style={{fontWeight:700,color:allProfit>=0?C.accent:C.red}}>{fmtRWF(allProfit)}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {/* Income bar */}
+    {totalInc>0&&<div style={{...S.card,padding:"12px 16px",marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",marginBottom:8,fontSize:12,fontWeight:700,color:C.text}}>
+        <span>Expense Ratio</span>
+        <span style={{color:totalExp>totalInc?C.red:C.accent}}>{totalInc>0?((totalExp/totalInc)*100).toFixed(1):0}%</span>
+      </div>
+      <div style={{height:10,background:C.elevated,borderRadius:6,overflow:"hidden"}}>
+        <div style={{height:"100%",width:Math.min((totalExp/totalInc)*100,100)+"%",background:totalExp>totalInc?"linear-gradient(90deg,#ef4444,#dc2626)":"linear-gradient(90deg,#f59e0b,#16a34a)",borderRadius:6,transition:"width .5s"}}/>
+      </div>
+      <div style={{display:"flex",gap:14,marginTop:6,fontSize:11,color:C.faint,flexWrap:"wrap"}}>
+        <span>💚 Income: {fmtRWF(totalInc)}</span>
+        <span>🔴 Expenses: {fmtRWF(totalExp)}</span>
+      </div>
+    </div>}
+
+    {/* 2-column grid */}
+    <div style={S.g2}>
+      {/* Cost breakdown */}
+      <div style={S.card}>
+        <div style={{fontSize:13,fontWeight:700,color:C.red,marginBottom:12}}>🔴 Cost Breakdown</div>
+        {topCosts.length===0?<div style={{color:C.faint,fontSize:12}}>No expenses recorded.</div>:
+          topCosts.map(([cat,amt])=>{
+            const pct=totalExp>0?((amt/totalExp)*100).toFixed(0):0;
+            return(<div key={cat} style={{marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:3}}>
+                <span style={{color:C.muted}}>{cat}</span>
+                <span style={{color:C.red,fontWeight:700}}>{fmtRWF(amt)} <span style={{color:C.faint,fontWeight:400}}>({pct}%)</span></span>
+              </div>
+              <div style={{height:5,background:C.elevated,borderRadius:3,overflow:"hidden"}}>
+                <div style={{height:"100%",width:pct+"%",background:cat==="Feed Purchase"?C.amber:C.red,borderRadius:3}}/>
+              </div>
+            </div>);
+          })}
+      </div>
+
+      {/* Top sales */}
+      <div style={S.card}>
+        <div style={{fontSize:13,fontWeight:700,color:"#10b981",marginBottom:12}}>💚 Top Sales</div>
+        {salePigs.length===0?<div style={{color:C.faint,fontSize:12}}>No sales recorded yet.</div>:
+          salePigs.map((s,i)=>(
+            <div key={s.id} style={{...S.row,marginBottom:6,background:i===0?"rgba(16,185,129,.06)":C.elevated}}>
+              <div>
+                <div style={{fontWeight:600,fontSize:12,color:C.text}}>🐷 {s.pigTag}</div>
+                <div style={{fontSize:10,color:C.faint}}>{s.buyer||"—"} · {s.date}</div>
+              </div>
+              <div style={{fontWeight:700,color:"#10b981",fontSize:13}}>{fmtRWF(s.total)}</div>
+            </div>
+          ))}
+      </div>
+    </div>
+
+    {/* Monthly profit spark */}
+    {months6.length>0&&<div style={{...S.card,marginTop:14}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:14}}>📅 Monthly Profit Trend</div>
+      <div style={{display:"flex",gap:8,alignItems:"flex-end",height:80}}>
+        {months6.map(([m,v])=>{
+          const p=v.inc-v.exp;
+          const h=Math.max(Math.abs(p)/maxMonthP*70,4);
+          const label=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(m.split("-")[1])-1];
+          return(<div key={m} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+            <div style={{fontSize:9,color:p>=0?C.accent:C.red,fontWeight:700}}>{p>=0?"+":""}{Math.round(p/1000)}k</div>
+            <div style={{width:"100%",height:h,background:p>=0?"linear-gradient(180deg,#16a34a,#10b981)":"linear-gradient(180deg,#ef4444,#dc2626)",borderRadius:4,transition:"height .5s"}}/>
+            <div style={{fontSize:9,color:C.faint}}>{label}</div>
+          </div>);
+        })}
+      </div>
+    </div>}
+
+    {/* Break-even */}
+    {breakEven!==null&&avgSalePig>0&&<div style={{...S.card,marginTop:14,background:"rgba(99,102,241,.03)",border:"1px solid rgba(99,102,241,.2)"}}>
+      <div style={{fontSize:13,fontWeight:700,color:"#6366f1",marginBottom:10}}>📐 Break-Even Analysis</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+        {[["Avg Sale/pig",fmtRWF(avgSalePig)],["Avg Cost/pig",fmtRWF(avgCostPig)],["Pigs to break even",breakEven+" pigs"]].map(([l,v])=>(
+          <div key={l} style={{background:C.elevated,borderRadius:8,padding:"8px 10px",textAlign:"center",border:"1px solid "+C.border}}>
+            <div style={{fontSize:10,color:C.faint,marginBottom:3}}>{l}</div>
+            <div style={{fontWeight:700,color:C.text,fontSize:13}}>{v}</div>
+          </div>
+        ))}
+      </div>
+      {fSales.length>=breakEven?
+        <div style={{marginTop:10,fontSize:12,color:C.accent}}>✅ Break-even reached! ({fSales.length} sales)</div>:
+        <div style={{marginTop:10,fontSize:12,color:C.amber}}>⏳ {fSales.length}/{breakEven} sales to break even</div>}
     </div>}
   </div>);
 }
