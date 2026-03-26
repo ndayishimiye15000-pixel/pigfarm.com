@@ -264,59 +264,178 @@ const JBIN_USERS_URL="https://api.jsonbin.io/v3/b/"+JBIN_USERS_ID;
 const JBIN_FARM_ID="69c0da0caa77b81da90d88a5";
 const JBIN_FARM_URL="https://api.jsonbin.io/v3/b/"+JBIN_FARM_ID;
 
-// In-memory write queue to prevent concurrent overwrites
-let _saveQueue=Promise.resolve();
-let _latestFarmData=null; // in-memory cache
+/* ═══════════════════════════════════════════════════
+   OFFLINE-FIRST STORAGE LAYER
+   ─ Every write goes to localStorage immediately
+   ─ Network writes are queued; synced when online
+   ─ On load, falls back to localStorage if offline
+   ─ window._offlineStatus tracks online/offline state
+   ─ window._syncListeners = Set of React setState fns
+     that components subscribe to for status updates
+═══════════════════════════════════════════════════ */
+const LS_FARM="farmiq_local_farm";
+const LS_USERS="farmiq_local_users";
+const LS_QUEUE="farmiq_sync_queue"; // [{id,type,payload,ts}]
 
+window._offlineStatus={online:navigator.onLine,queueLen:0,syncing:false,lastSync:""};
+window._syncListeners=new Set();
+function _notifySyncListeners(){window._syncListeners.forEach(fn=>{try{fn({...window._offlineStatus});}catch(e){}});}
+
+/* ── Local read/write helpers ── */
+function lsGetFarm(){try{const v=localStorage.getItem(LS_FARM);return v?JSON.parse(v):null;}catch{return null;}}
+function lsSetFarm(data){try{localStorage.setItem(LS_FARM,JSON.stringify(data));}catch(e){console.warn("LS full",e);}}
+function lsGetUsers(){try{const v=localStorage.getItem(LS_USERS);return v?JSON.parse(v):null;}catch{return null;}}
+function lsSetUsers(data){try{localStorage.setItem(LS_USERS,JSON.stringify(data));}catch(e){}}
+function lsGetQueue(){try{const v=localStorage.getItem(LS_QUEUE);return v?JSON.parse(v):[];}catch{return[];}}
+function lsSetQueue(q){try{localStorage.setItem(LS_QUEUE,JSON.stringify(q));}catch(e){}}
+function lsEnqueue(type,payload){
+  const q=lsGetQueue();
+  // Dedupe: if same type exists replace it (we only need latest full state)
+  const filtered=q.filter(x=>x.type!==type);
+  filtered.push({id:uid(),type,payload,ts:new Date().toISOString()});
+  lsSetQueue(filtered);
+  window._offlineStatus.queueLen=filtered.length;
+  _notifySyncListeners();
+}
+function lsDequeue(type){
+  const q=lsGetQueue().filter(x=>x.type!==type);
+  lsSetQueue(q);
+  window._offlineStatus.queueLen=q.length;
+  _notifySyncListeners();
+}
+
+/* ── In-memory cache ── */
+let _saveQueue=Promise.resolve();
+let _latestFarmData=lsGetFarm()||null; // seed from localStorage on startup
+
+/* ── Network helpers ── */
+async function _pushFarmToJBin(data){
+  const res=await fetch(JBIN_FARM_URL,{
+    method:"PUT",
+    headers:{"Content-Type":"application/json","X-Master-Key":JBIN_KEY},
+    body:JSON.stringify(data)
+  });
+  if(!res.ok) throw new Error("jbin farm PUT failed "+res.status);
+}
+async function _pushUsersToJBin(payload){
+  const res=await fetch(JBIN_USERS_URL,{
+    method:"PUT",
+    headers:{"Content-Type":"application/json","X-Master-Key":JBIN_KEY},
+    body:JSON.stringify(payload)
+  });
+  if(!res.ok) throw new Error("jbin users PUT failed "+res.status);
+}
+
+/* ── Sync queue flush ── */
+let _syncInFlight=false;
+async function flushSyncQueue(){
+  if(_syncInFlight||!navigator.onLine) return;
+  const q=lsGetQueue();
+  if(q.length===0) return;
+  _syncInFlight=true;
+  window._offlineStatus.syncing=true;
+  _notifySyncListeners();
+  let anyFailed=false;
+  for(const item of q){
+    try{
+      if(item.type==="farm") await _pushFarmToJBin(item.payload);
+      if(item.type==="users") await _pushUsersToJBin(item.payload);
+      lsDequeue(item.type);
+    }catch(e){console.warn("sync flush failed for",item.type,e);anyFailed=true;break;}
+  }
+  window._offlineStatus.syncing=false;
+  if(!anyFailed){
+    window._offlineStatus.lastSync=new Date().toLocaleTimeString("en-RW",{hour:"2-digit",minute:"2-digit"});
+  }
+  _syncInFlight=false;
+  _notifySyncListeners();
+}
+
+/* ── Online/offline listeners ── */
+window.addEventListener("online",()=>{
+  window._offlineStatus.online=true;
+  _notifySyncListeners();
+  flushSyncQueue();
+});
+window.addEventListener("offline",()=>{
+  window._offlineStatus.online=false;
+  _notifySyncListeners();
+});
+
+/* ── Public API ── */
 async function getOnlineUsers(){
   try{
     const res=await fetch(JBIN_USERS_URL+"/latest",{headers:{"X-Master-Key":JBIN_KEY,"X-Bin-Meta":"false"}});
     if(!res.ok) throw new Error("fetch failed "+res.status);
     const data=await res.json();
+    if(data) lsSetUsers(data); // cache locally
     return data&&data.list?data.list:null;
-  }catch(e){console.error("getUsers error",e);return null;}
+  }catch(e){
+    // Fallback to localStorage
+    const cached=lsGetUsers();
+    if(cached&&cached.list) return cached.list;
+    return null;
+  }
 }
 async function setOnlineUsers(users){
-  try{
-    const res=await fetch(JBIN_USERS_URL,{method:"PUT",headers:{"Content-Type":"application/json","X-Master-Key":JBIN_KEY},body:JSON.stringify({list:users,updatedAt:new Date().toISOString()})});
-    if(!res.ok) throw new Error("save failed "+res.status);
-  }catch(e){console.error("setUsers error",e);throw e;}
+  const payload={list:users,updatedAt:new Date().toISOString()};
+  lsSetUsers(payload); // always write locally first
+  if(navigator.onLine){
+    try{await _pushUsersToJBin(payload);}
+    catch(e){lsEnqueue("users",payload);}
+  } else {
+    lsEnqueue("users",payload);
+  }
 }
 
 async function _doGetFarm(){
   try{
     const res=await fetch(JBIN_FARM_URL+"/latest",{headers:{"X-Master-Key":JBIN_KEY,"X-Bin-Meta":"false"}});
-    if(!res.ok) return null;
+    if(!res.ok) throw new Error("fetch failed "+res.status);
     const data=await res.json();
-    if(data) _latestFarmData={...data};
+    if(data){_latestFarmData={...data};lsSetFarm(data);}
     return data||null;
-  }catch(e){console.error("getFarm error",e);return null;}
+  }catch(e){
+    // Fallback to localStorage cache
+    const cached=lsGetFarm();
+    if(cached){_latestFarmData=cached;return cached;}
+    return null;
+  }
 }
 async function getOnlineFarmData(){return _doGetFarm();}
 
-// Queued save — prevents concurrent writes overwriting each other
+// Queued save — writes to localStorage immediately, then to JSONBin
 function setOnlineFarmData(data){
   _latestFarmData={...(_latestFarmData||{}), ...data, updatedAt:new Date().toISOString()};
-  _saveQueue=_saveQueue.then(async()=>{
-    try{
-      const res=await fetch(JBIN_FARM_URL,{method:"PUT",headers:{"Content-Type":"application/json","X-Master-Key":JBIN_KEY},body:JSON.stringify(_latestFarmData)});
-      if(!res.ok) console.error("setFarm failed",res.status);
-    }catch(e){console.error("setFarm error",e);}
-  });
+  lsSetFarm(_latestFarmData); // persist locally IMMEDIATELY — offline-safe
+  if(navigator.onLine){
+    _saveQueue=_saveQueue.then(async()=>{
+      try{
+        await _pushFarmToJBin(_latestFarmData);
+        lsDequeue("farm"); // clear any queued copy since we just synced
+        if(!window._offlineStatus.lastSync){
+          window._offlineStatus.lastSync=new Date().toLocaleTimeString("en-RW",{hour:"2-digit",minute:"2-digit"});
+          _notifySyncListeners();
+        }
+      }catch(e){
+        console.warn("setFarm network error — queued",e);
+        lsEnqueue("farm",_latestFarmData);
+      }
+    });
+  } else {
+    lsEnqueue("farm",_latestFarmData);
+  }
   return _saveQueue;
 }
 
-// Save a single key in the farm data (uses cache to avoid re-fetch)
 function fsSet(key,list){
   const patch={[key]:list};
   return setOnlineFarmData(patch);
 }
 
-// Fake fsListen — loads once then calls setter (no Firestore needed)
 function fsListen(key,setter,setLoaded,fallback){
-  // Just set loaded immediately; data is loaded in bulk on App mount
   if(setLoaded) setTimeout(()=>setLoaded(true),0);
-  return ()=>{}; // no-op unsubscribe
+  return ()=>{};
 }
 
 async function jbinAppend(key,newItem){
@@ -328,6 +447,16 @@ async function jbinAppend(key,newItem){
 
 async function getOnlineSession(){return null;}
 async function setOnlineSession(user){}
+
+/* ── React hook for sync status ── */
+function useSyncStatus(){
+  const [status,setStatus]=React.useState({...window._offlineStatus});
+  React.useEffect(()=>{
+    window._syncListeners.add(setStatus);
+    return()=>window._syncListeners.delete(setStatus);
+  },[]);
+  return status;
+}
 
 /* ─── API Key Store ─── */
 function getApiKey(){return localStorage.getItem("fiq_apikey")||"";}
@@ -3244,6 +3373,7 @@ function App(){
 
   const [page,setPage]=useState("home");
   const [showApiModal,setShowApiModal]=useState(false);
+  const syncStatus=useSyncStatus();
 
   // ═══ JSONBIN-ONLY DATA LOADING ═══
   // Load everything from JSONBin once on mount, then poll every 8s
@@ -3466,6 +3596,32 @@ function App(){
           </button>
         </div>
         {lastRefresh&&<div style={{fontSize:9,color:"rgba(74,222,128,.5)",marginTop:4}}>Last sync: {lastRefresh}</div>}
+      </div>
+      {/* ── Offline / Sync status badge ── */}
+      <div style={{padding:"6px 14px 2px",flexShrink:0}}>
+        {syncStatus.online?(
+          syncStatus.syncing?(
+            <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 10px",borderRadius:7,background:"rgba(37,99,235,.1)",border:"1px solid rgba(37,99,235,.3)"}}>
+              <span className="spin" style={{display:"inline-block",width:8,height:8,border:"1.5px solid rgba(37,99,235,.3)",borderTop:"1.5px solid #60a5fa",borderRadius:"50%"}}/>
+              <span style={{fontSize:10,color:"#60a5fa",fontWeight:600}}>Syncing…</span>
+            </div>
+          ):syncStatus.queueLen>0?(
+            <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 10px",borderRadius:7,background:"rgba(245,158,11,.1)",border:"1px solid rgba(245,158,11,.3)"}}>
+              <span style={{width:7,height:7,borderRadius:"50%",background:"#fbbf24",flexShrink:0}}/>
+              <span style={{fontSize:10,color:"#fbbf24",fontWeight:600}}>{syncStatus.queueLen} change{syncStatus.queueLen>1?"s":""} pending sync</span>
+            </div>
+          ):(
+            <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 10px",borderRadius:7,background:"rgba(74,222,128,.06)",border:"1px solid rgba(74,222,128,.2)"}}>
+              <span style={{width:7,height:7,borderRadius:"50%",background:"#4ade80",flexShrink:0}}/>
+              <span style={{fontSize:10,color:"rgba(74,222,128,.8)",fontWeight:600}}>Online{syncStatus.lastSync?" · "+syncStatus.lastSync:""}</span>
+            </div>
+          )
+        ):(
+          <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 10px",borderRadius:7,background:"rgba(239,68,68,.12)",border:"1px solid rgba(239,68,68,.4)"}}>
+            <span style={{width:7,height:7,borderRadius:"50%",background:"#f87171",flexShrink:0,animation:"pulse 1.5s ease-in-out infinite"}}/>
+            <span style={{fontSize:10,color:"#f87171",fontWeight:700}}>Offline — saving locally{syncStatus.queueLen>0?" ("+syncStatus.queueLen+")":" "}</span>
+          </div>
+        )}
       </div>
       <div style={{padding:"8px 14px 6px",flexShrink:0}}>
         <button onClick={()=>setShowApiModal(true)} style={{width:"100%",padding:"7px 11px",borderRadius:8,border:"1px solid "+(getApiKey()?"rgba(74,222,128,.3)":"rgba(245,158,11,.4)"),background:getApiKey()?"rgba(74,222,128,.08)":"rgba(245,158,11,.07)",color:getApiKey()?"#4ade80":"#fbbf24",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600,display:"flex",alignItems:"center",gap:7,justifyContent:"center"}}>
@@ -4733,9 +4889,13 @@ function Login({users,setUsers,setUser}){
           <div style={{position:"relative",marginTop:18,fontSize:13,color:"rgba(255,255,255,.55)",lineHeight:1.5}}>
             {tab==="login"?"Welcome back! Sign in to manage your farm.":"Create your worker account to get started."}
           </div>
-          {/* Online badge */}
-          <div style={{position:"absolute",top:16,right:16,padding:"4px 10px",borderRadius:20,background:"rgba(74,222,128,.18)",border:"1px solid rgba(74,222,128,.35)",fontSize:10,color:"#4ade80",fontWeight:700,display:"flex",alignItems:"center",gap:5}}>
-            <span style={{width:6,height:6,borderRadius:"50%",background:"#4ade80",display:"inline-block",animation:"pulse 2s ease-in-out infinite"}}/>ONLINE
+          {/* Online/Offline badge */}
+          <div style={{position:"absolute",top:16,right:16,padding:"4px 10px",borderRadius:20,
+            background:navigator.onLine?"rgba(74,222,128,.18)":"rgba(239,68,68,.18)",
+            border:"1px solid "+(navigator.onLine?"rgba(74,222,128,.35)":"rgba(239,68,68,.4)"),
+            fontSize:10,color:navigator.onLine?"#4ade80":"#f87171",fontWeight:700,display:"flex",alignItems:"center",gap:5}}>
+            <span style={{width:6,height:6,borderRadius:"50%",background:navigator.onLine?"#4ade80":"#f87171",display:"inline-block",animation:"pulse 2s ease-in-out infinite"}}/>
+            {navigator.onLine?"ONLINE":"OFFLINE"}
           </div>
         </div>
 
