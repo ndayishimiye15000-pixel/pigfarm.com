@@ -68,11 +68,12 @@ const fmtNum=(n)=>Math.round(n||0).toLocaleString();
 // affect the balance again.
 // ══════════════════════════════════════════════════════════
 function calcCapitalBalance(capital, feeds, sales, expenses, incomes){
+  const ok=x=>x.approved!==false;
   const initial = capital.initial || 0;
-  const saleInc  = (sales   ||[]).reduce((s,x)=>s+(x.total   ||0),0);
-  const otherInc = (incomes  ||[]).reduce((s,x)=>s+(x.amount  ||0),0);
-  const feedExp  = (feeds    ||[]).reduce((s,x)=>s+(x.cost    ||0),0);
-  const otherExp = (expenses ||[]).reduce((s,x)=>s+(x.amount  ||0),0);
+  const saleInc  = (sales   ||[]).filter(ok).reduce((s,x)=>s+(x.total   ||0),0);
+  const otherInc = (incomes  ||[]).filter(ok).reduce((s,x)=>s+(x.amount  ||0),0);
+  const feedExp  = (feeds    ||[]).filter(ok).reduce((s,x)=>s+(x.cost    ||0),0);
+  const otherExp = (expenses ||[]).filter(ok).reduce((s,x)=>s+(x.amount  ||0),0);
   return initial + saleInc + otherInc - feedExp - otherExp;
 }
 
@@ -111,8 +112,9 @@ function capitalTx(capital,setCapital,{type,category,amount,description,date,ref
 
 // P&L — same source of truth as calcCapitalBalance (actual data arrays)
 function calcPnL(capital,feeds,sales,expenses,incomes){
-  const totalInc=sales.reduce((s,l)=>s+(l.total||0),0)+incomes.reduce((s,l)=>s+(l.amount||0),0);
-  const totalExp=feeds.reduce((s,l)=>s+(l.cost||0),0)+expenses.reduce((s,l)=>s+(l.amount||0),0);
+  const ok=x=>x.approved!==false; // undefined (old data) = approved; false = pending
+  const totalInc=sales.filter(ok).reduce((s,l)=>s+(l.total||0),0)+incomes.filter(ok).reduce((s,l)=>s+(l.amount||0),0);
+  const totalExp=feeds.filter(ok).reduce((s,l)=>s+(l.cost||0),0)+expenses.filter(ok).reduce((s,l)=>s+(l.amount||0),0);
   return{totalInc,totalExp,profit:totalInc-totalExp};
 }
 
@@ -2094,6 +2096,153 @@ function RemoteWorkAdmin({sessions,setSessions,users}){
 }
 
 
+/* ═══════════════════════════════════════════════════
+   APPROVAL PANEL — Admin reviews all pending entries
+═══════════════════════════════════════════════════ */
+function ApprovalPanel({feeds,setFeeds,logs,setLogs,sales,setSales,expenses,setExpenses,pigs,setPigs,capital,setCapital}){
+  const [toast,setToast]=useState(null);
+  const [tab,setTab]=useState("all");
+  function showToast(msg,type="success"){setToast({msg,type});setTimeout(()=>setToast(null),3000);}
+
+  const pendingFeeds=feeds.filter(x=>x.approved===false);
+  const pendingLogs=logs.filter(x=>x.approved===false);
+  const pendingSales=sales.filter(x=>x.approved===false);
+  const pendingExp=expenses.filter(x=>x.approved===false);
+  const total=pendingFeeds.length+pendingLogs.length+pendingSales.length+pendingExp.length;
+
+  function approveItem(type,id){
+    if(type==="feed"){
+      const item=feeds.find(x=>x.id===id);
+      if(!item)return;
+      const updated=feeds.map(x=>x.id===id?{...x,approved:true}:x);
+      setFeeds(updated);fsSet("feeds",updated);
+      capitalTx(capital,setCapital,{type:"expense",category:"Feed Purchase",amount:item.cost,description:`${item.kg}kg ${item.feedType} — by ${item.worker}`,date:item.date,refId:"feed_"+id});
+      showToast(`✅ Feed log by ${item.worker} approved`);
+    } else if(type==="log"){
+      const item=logs.find(x=>x.id===id);
+      const updated=logs.map(x=>x.id===id?{...x,approved:true}:x);
+      setLogs(updated);fsSet("logs",updated);
+      if(item&&item.deaths>0&&parseFloat(item.deathLossAmount)>0){
+        capitalTx(capital,setCapital,{type:"expense",category:"Pig Death Loss",amount:parseFloat(item.deathLossAmount),description:`${item.deaths} pig(s) died — ${item.worker}`,date:item.date});
+      }
+      showToast(`✅ Daily log by ${item?item.worker:"worker"} approved`);
+    } else if(type==="sale"){
+      const item=sales.find(x=>x.id===id);
+      if(!item)return;
+      const updated=sales.map(x=>x.id===id?{...x,approved:true}:x);
+      setSales(updated);fsSet("sales",updated);
+      if(item.pigId) setPigs(p=>{const u=p.map(pig=>pig.id===item.pigId?{...pig,status:"sold"}:pig);fsSet("pigs",u);return u;});
+      capitalTx(capital,setCapital,{type:"income",category:"Pig Sale",amount:item.total,description:`${item.weight}kg @ RWF ${item.priceKg}/kg to ${item.buyer||"buyer"} — by ${item.worker}`,date:item.date,refId:"sale_"+id});
+      showToast(`✅ Sale of ${fmtRWF(item.total)} by ${item.worker} approved`);
+    } else if(type==="expense"){
+      const item=expenses.find(x=>x.id===id);
+      if(!item)return;
+      const updated=expenses.map(x=>x.id===id?{...x,approved:true}:x);
+      setExpenses(updated);fsSet("expenses",updated);
+      capitalTx(capital,setCapital,{type:"expense",category:item.category,amount:item.amount,description:`${item.item||item.category} — by ${item.worker}`,date:item.date,refId:"exp_"+id});
+      showToast(`✅ Purchase of ${fmtRWF(item.amount)} by ${item.worker} approved`);
+    }
+  }
+
+  function rejectItem(type,id){
+    if(!window.confirm("Reject and delete this entry permanently?"))return;
+    if(type==="feed"){const u=feeds.filter(x=>x.id!==id);setFeeds(u);fsSet("feeds",u);showToast("🗑️ Feed log rejected","error");}
+    else if(type==="log"){const u=logs.filter(x=>x.id!==id);setLogs(u);fsSet("logs",u);showToast("🗑️ Daily log rejected","error");}
+    else if(type==="sale"){const u=sales.filter(x=>x.id!==id);setSales(u);fsSet("sales",u);showToast("🗑️ Sale rejected","error");}
+    else if(type==="expense"){const u=expenses.filter(x=>x.id!==id);setExpenses(u);fsSet("expenses",u);showToast("🗑️ Purchase rejected","error");}
+  }
+
+  function approveAll(){
+    if(!window.confirm(`Approve all ${total} pending entries?`))return;
+    // Approve all feeds
+    if(pendingFeeds.length){
+      const u=feeds.map(x=>x.approved===false?{...x,approved:true}:x);
+      setFeeds(u);fsSet("feeds",u);
+      pendingFeeds.forEach(f=>capitalTx(capital,setCapital,{type:"expense",category:"Feed Purchase",amount:f.cost,description:`${f.kg}kg ${f.feedType} — by ${f.worker}`,date:f.date,refId:"feed_"+f.id}));
+    }
+    // Approve all logs
+    if(pendingLogs.length){
+      const u=logs.map(x=>x.approved===false?{...x,approved:true}:x);
+      setLogs(u);fsSet("logs",u);
+      pendingLogs.forEach(l=>{if(l.deaths>0&&parseFloat(l.deathLossAmount)>0)capitalTx(capital,setCapital,{type:"expense",category:"Pig Death Loss",amount:parseFloat(l.deathLossAmount),description:`${l.deaths} pig(s) died — ${l.worker}`,date:l.date});});
+    }
+    // Approve all sales
+    if(pendingSales.length){
+      const u=sales.map(x=>x.approved===false?{...x,approved:true}:x);
+      setSales(u);fsSet("sales",u);
+      pendingSales.forEach(s=>{
+        if(s.pigId)setPigs(p=>{const u2=p.map(pig=>pig.id===s.pigId?{...pig,status:"sold"}:pig);fsSet("pigs",u2);return u2;});
+        capitalTx(capital,setCapital,{type:"income",category:"Pig Sale",amount:s.total,description:`${s.weight}kg @ RWF ${s.priceKg}/kg to ${s.buyer||"buyer"} — by ${s.worker}`,date:s.date,refId:"sale_"+s.id});
+      });
+    }
+    // Approve all expenses
+    if(pendingExp.length){
+      const u=expenses.map(x=>x.approved===false?{...x,approved:true}:x);
+      setExpenses(u);fsSet("expenses",u);
+      pendingExp.forEach(e=>capitalTx(capital,setCapital,{type:"expense",category:e.category,amount:e.amount,description:`${e.item||e.category} — by ${e.worker}`,date:e.date,refId:"exp_"+e.id}));
+    }
+    showToast(`✅ All ${total} entries approved!`);
+  }
+
+  const tabs=[{id:"all",l:"All ("+total+")"},{id:"sale",l:"💰 Sales ("+pendingSales.length+")"},{id:"feed",l:"🌾 Feeds ("+pendingFeeds.length+")"},{id:"expense",l:"🛒 Purchases ("+pendingExp.length+")"},{id:"log",l:"📋 Logs ("+pendingLogs.length+")"}];
+
+  function Card({type,item,extra}){
+    const colors={sale:"#10b981",feed:C.amber,expense:C.red,log:C.blue};
+    const labels={sale:"💰 Sale",feed:"🌾 Feed Log",expense:"🛒 Purchase",log:"📋 Daily Log"};
+    return(
+      <div style={{...S.card,marginBottom:10,borderLeft:"3px solid "+(colors[type]||C.border)}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+          <div style={{flex:1}}>
+            <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4,flexWrap:"wrap"}}>
+              <span style={{fontSize:11,padding:"2px 8px",borderRadius:12,background:"rgba(245,158,11,.12)",color:"#d97706",fontWeight:700}}>⏳ Pending</span>
+              <span style={{fontSize:12,fontWeight:700,color:C.text}}>{labels[type]}</span>
+              <span style={{fontSize:11,color:C.muted}}>by {item.worker}</span>
+            </div>
+            <div style={{fontSize:11,color:C.faint}}>{extra}</div>
+            <div style={{fontSize:10,color:C.faint,marginTop:2}}>📅 {item.date}</div>
+          </div>
+          <div style={{display:"flex",gap:6,flexShrink:0}}>
+            <button onClick={()=>approveItem(type,item.id)} style={{padding:"6px 14px",borderRadius:8,border:"none",background:"#16a34a",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>✓ Approve</button>
+            <button onClick={()=>rejectItem(type,item.id)} style={{padding:"6px 12px",borderRadius:8,border:"1px solid rgba(239,68,68,.4)",background:"rgba(239,68,68,.06)",color:C.red,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✗ Reject</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return(<div>
+    {toast&&<div style={{position:"fixed",top:16,right:16,zIndex:9999,padding:"10px 18px",borderRadius:10,background:toast.type==="error"?"#dc2626":"#16a34a",color:"#fff",fontSize:13,fontWeight:700,boxShadow:"0 4px 16px rgba(0,0,0,.2)"}}>{toast.msg}</div>}
+    <div style={S.h1}>✅ Data Approval Panel</div>
+    <div style={S.sub}>Review and approve all entries submitted by workers before they affect the system</div>
+
+    {total===0?(
+      <div style={{...S.card,textAlign:"center",padding:40,color:C.faint}}>
+        <div style={{fontSize:40,marginBottom:12}}>✅</div>
+        <div style={{fontSize:16,fontWeight:700,color:C.accent}}>All caught up!</div>
+        <div style={{fontSize:13,marginTop:6}}>No pending entries to review.</div>
+      </div>
+    ):(
+      <>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:10}}>
+          <div style={{padding:"10px 16px",background:"rgba(245,158,11,.1)",border:"1px solid rgba(245,158,11,.35)",borderRadius:10,fontSize:13,fontWeight:700,color:"#92400e"}}>
+            ⏳ {total} pending entr{total===1?"y":"ies"} waiting for your review
+          </div>
+          <button onClick={approveAll} style={{padding:"10px 20px",borderRadius:9,border:"none",background:"#16a34a",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>✓ Approve All ({total})</button>
+        </div>
+
+        <div style={{display:"flex",gap:4,marginBottom:14,overflowX:"auto",flexWrap:"wrap"}}>
+          {tabs.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"7px 13px",borderRadius:8,border:"none",background:tab===t.id?C.accent:"transparent",color:tab===t.id?"#fff":C.muted,fontWeight:tab===t.id?700:400,fontSize:12,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>{t.l}</button>)}
+        </div>
+
+        {(tab==="all"||tab==="sale")&&pendingSales.map(s=><Card key={s.id} type="sale" item={s} extra={`${s.weight}kg @ RWF ${fmtNum(s.priceKg)}/kg → ${s.buyer||"—"} · Total: ${fmtRWF(s.total)}`}/>)}
+        {(tab==="all"||tab==="feed")&&pendingFeeds.map(f=><Card key={f.id} type="feed" item={f} extra={`${f.kg}kg ${f.feedType} · Cost: ${fmtRWF(f.cost)}`}/>)}
+        {(tab==="all"||tab==="expense")&&pendingExp.map(e=><Card key={e.id} type="expense" item={e} extra={`${e.item||e.category}${e.quantity?" · "+e.quantity+" "+e.unit:""} · ${fmtRWF(e.amount)}`}/>)}
+        {(tab==="all"||tab==="log")&&pendingLogs.map(l=><Card key={l.id} type="log" item={l} extra={`Checked: ${l.checked} · Sick: ${l.sick} · Deaths: ${l.deaths} · Notes: ${l.notes||"—"}`}/>)}
+      </>
+    )}
+  </div>);
+}
+
 function App(){
   const [users,setUsers]=useState(INIT_USERS);
   const [usersLoaded,setUsersLoaded]=useState(false);
@@ -2282,9 +2431,11 @@ function App(){
   const lowStockCount=(stock||[]).filter(s=>s.quantity<=s.minLevel).length;
   const upcomingFarrows=reproductions.filter(r=>r.status==="pregnant"&&daysDiff(r.expectedFarrow)>=0&&daysDiff(r.expectedFarrow)<=7).length;
   const allData={pigs,feeds,sales,logs,expenses,incomes,users,messages,reproductions,stock};
+  const pendingDataCount=[...feeds,...logs,...sales,...expenses].filter(x=>x.approved===false).length;
 
   const adminNav=[
     {id:"home",l:"📊 Overview"},
+    {id:"approvals",l:"✅ Approvals"+(pendingDataCount>0?" 🔴"+pendingDataCount:"")},
     {id:"ai",l:"🤖 AI Advisor"},
     {id:"bigdata",l:"🧠 Big Data"},
     {id:"pnl",l:"💹 P&L Analysis"},
@@ -2296,9 +2447,11 @@ function App(){
     {id:"finance",l:"💰 Financials"},
     {id:"pigs",l:"🐷 Pigs"},
     {id:"feeding",l:"🌾 Feeding"},
+    {id:"adminfeed",l:"🌾 Add Feed Log"},
     {id:"sales",l:"🏷️ Sales"},
     {id:"adminbuy",l:"🛒 Record Purchase"},
     {id:"adminsell",l:"💰 Record Sale"},
+    {id:"adminlog",l:"📝 Add Daily Log"},
     {id:"daylogs",l:"📋 Daily Logs"},
     {id:"messages",l:"📢 Messages"+(messages.length?" ("+messages.length+")":"")},
     {id:"workers",l:"👷 Workers"+(pending.length?" ("+pending.length+")":"")},
@@ -2393,6 +2546,24 @@ function App(){
           }}>✓ Review Now →</button>
         </div>
       )}
+      {isAdmin&&pendingDataCount>0&&page!=="approvals"&&(
+        <div style={{
+          display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10,
+          padding:"12px 16px",marginBottom:16,
+          background:"linear-gradient(135deg,rgba(239,68,68,.12),rgba(239,68,68,.06))",
+          border:"1.5px solid rgba(239,68,68,.4)",borderRadius:12
+        }}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:22}}>⏳</span>
+            <div>
+              <div style={{fontWeight:700,color:"#991b1b",fontSize:14}}>{pendingDataCount} Pending Entr{pendingDataCount===1?"y":"ies"} Need Your Approval</div>
+              <div style={{fontSize:12,color:"#b91c1c",marginTop:2}}>Worker-submitted feeds, sales, purchases, and logs waiting to be counted.</div>
+            </div>
+          </div>
+          <button onClick={()=>setPage("approvals")} style={{padding:"9px 18px",borderRadius:9,border:"none",cursor:"pointer",background:"#dc2626",color:"#fff",fontWeight:700,fontSize:13,fontFamily:"inherit",whiteSpace:"nowrap"}}>✅ Review Now →</button>
+        </div>
+      )}
+      {isAdmin&&page==="approvals"&&<ApprovalPanel feeds={feeds} setFeeds={setFeeds} logs={logs} setLogs={setLogs} sales={sales} setSales={setSales} expenses={expenses} setExpenses={setExpenses} pigs={pigs} setPigs={setPigs} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="bigdata"&&<BigData pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} users={users} capital={capital}/>}
       {isAdmin&&page==="home"&&<AHome pigs={pigs} feeds={feeds} sales={sales} logs={logs} users={users} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} allData={allData} setPage={setPage} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="ai"&&<AIAdvisor pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
@@ -2413,6 +2584,8 @@ function App(){
       {isAdmin&&page==="capital"&&<CapitalManager capital={capital} setCapital={setCapital} feeds={feeds} sales={sales} expenses={expenses} incomes={incomes} pigs={pigs} user={user}/>}
       {isAdmin&&page==="adminbuy"&&<BEntry user={user} expenses={expenses} setExpenses={setExpenses} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="adminsell"&&<SEntry user={user} pigs={pigs} setPigs={setPigs} sales={sales} setSales={setSales} capital={capital} setCapital={setCapital}/>}
+      {isAdmin&&page==="adminfeed"&&<FEntry user={user} pigs={pigs} feeds={feeds} setFeeds={setFeeds} capital={capital} setCapital={setCapital}/>}
+      {isAdmin&&page==="adminlog"&&<DEntry user={user} pigs={pigs} logs={logs} setLogs={setLogs} capital={capital} setCapital={setCapital}/>}
       {!isAdmin&&page==="home"&&<WHome user={user} logs={logs} feeds={feeds} sales={sales} messages={messages}/>}
       {!isAdmin&&page==="inbox"&&<WorkerInbox messages={messages}/>}
       {!isAdmin&&page==="dailyentry"&&<DEntry user={user} pigs={pigs} logs={logs} setLogs={setLogs} capital={capital} setCapital={setCapital}/>}
@@ -4798,19 +4971,20 @@ function DEntry({user,pigs,logs,setLogs,capital,setCapital}){
   const closeToast=useCallback(()=>setToast(null),[]);
   async function doSave(){
     setConfirm(false);
-    const newLog={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay()};
+    const isAdmin=user.role==="admin";
+    const newLog={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),approved:isAdmin?true:false};
     setLogs(p=>{const updated=[...p,newLog];fsSet("logs",updated);return updated;});
-    // Deduct capital for pig deaths if amount entered
-    if(setCapital&&form.deaths>0&&parseFloat(form.deathLossAmount)>0){
-      capitalTx(capital,setCapital,{type:"expense",category:"Pig Death Loss",amount:parseFloat(form.deathLossAmount),description:`${form.deaths} pig(s) died — loss entered by ${user.name}`,date:toDay()});
+    // Only deduct capital if admin-entered (approved)
+    if(isAdmin&&setCapital&&form.deaths>0&&parseFloat(form.deathLossAmount)>0){
+      capitalTx(capital,setCapital,{type:"expense",category:"Pig Death Loss",amount:parseFloat(form.deathLossAmount),description:`${form.deaths} pig(s) died — entered by ${user.name}`,date:toDay()});
     }
     try{
       await jbinAppend("logs",newLog);
-      setToast({type:"success",message:"Daily report saved successfully!"});
+      setToast({type:"success",message:isAdmin?"✅ Daily report saved!":"✅ Report submitted! Awaiting admin approval."});
       setTimeout(()=>setDone(true),1600);
     }catch(e){setToast({type:"error",message:"Failed to save. Check internet and try again."});}
   }
-  if(logs.some(l=>l.workerId===user.id&&l.date===toDay())||done)return(<div style={{textAlign:"center",padding:60}}><div style={{fontSize:48}}>✅</div><div style={{fontSize:19,fontWeight:700,color:C.accent,marginTop:14}}>Report submitted!</div><div style={{fontSize:13,color:C.faint,marginTop:6}}>Come back tomorrow.</div></div>);
+  if((!user||user.role!=="admin")&&(logs.some(l=>l.workerId===user.id&&l.date===toDay())||done))return(<div style={{textAlign:"center",padding:60}}><div style={{fontSize:48}}>✅</div><div style={{fontSize:19,fontWeight:700,color:C.accent,marginTop:14}}>Report submitted!</div><div style={{fontSize:13,color:C.faint,marginTop:6}}>Come back tomorrow.</div></div>);
   return(<div style={{maxWidth:490}}>
     {confirm&&<ConfirmDialog title="Submit Daily Report?" body={`Checked: ${form.checked} pigs · Sick: ${form.sick} · Deaths: ${form.deaths} · Births: ${form.births}${form.deaths>0&&form.deathLossAmount?" · Loss: RWF "+parseInt(form.deathLossAmount).toLocaleString():""}. Are you sure you want to submit this report for ${toDay()}?`} onConfirm={doSave} onCancel={()=>setConfirm(false)}/>}
     {toast&&<Toast message={toast.message} type={toast.type} onClose={closeToast}/>}
@@ -4875,19 +5049,15 @@ function FEntry({user,pigs,feeds,setFeeds,capital,setCapital}){
       setToast({type:"error",message:"Please enter valid kg and cost per kg values."});
       return;
     }
+    const isAdmin=user.role==="admin";
     const costVal=totalCost;
-    const newFeed={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg,cost:costVal,costPerKg};
-    setFeeds(p=>{
-      const updated=[...p,newFeed];
-      // Sync to Firestore immediately
-      fsSet("feeds",updated);
-      return updated;
-    });
-    // Record capital transaction (expense)
-    if(setCapital) capitalTx(capital,setCapital,{type:"expense",category:"Feed Purchase",amount:costVal,description:`${kg}kg ${form.feedType}${selPig?" for "+selPig.tag:""}`,date:toDay()});
+    const newFeed={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg,cost:costVal,costPerKg,approved:isAdmin?true:false};
+    setFeeds(p=>{const updated=[...p,newFeed];fsSet("feeds",updated);return updated;});
+    // Only record capital if admin-entered (approved immediately)
+    if(isAdmin&&setCapital) capitalTx(capital,setCapital,{type:"expense",category:"Feed Purchase",amount:costVal,description:`${kg}kg ${form.feedType}${selPig?" for "+selPig.tag:""}`,date:toDay()});
     try{
       await jbinAppend("feeds",newFeed);
-      setToast({type:"success",message:`✅ ${kg}kg of ${form.feedType} saved · RWF ${costVal.toLocaleString()} (${Math.round(costPerKg)} RWF/kg)`});
+      setToast({type:"success",message:isAdmin?`✅ ${kg}kg of ${form.feedType} saved · RWF ${costVal.toLocaleString()}`:`✅ Feed log submitted! Awaiting admin approval.`});
       setSaved(true);
       setTimeout(()=>{setSaved(false);setForm({pigId:"",feedType:"Maize bran",kg:"",costPerKg:"",notes:""});},2200);
     }catch(e){setToast({type:"error",message:"Failed to save. Check internet and try again."});}
@@ -4982,18 +5152,19 @@ function SEntry({user,pigs,setPigs,sales,setSales,capital,setCapital}){
   }
   async function doSave(){
     setConfirm(false);
+    const isAdmin=user.role==="admin";
     const calcTotal=parseFloat(form.weight)*parseFloat(form.priceKg)||0;
     const finalTotal=parseFloat(form.total)||calcTotal;
-    const newSale={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:Math.round(finalTotal)};
-    // Update sales list and sync to Firestore
+    const newSale={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:Math.round(finalTotal),approved:isAdmin?true:false};
     setSales(p=>{const updated=[...p,newSale];fsSet("sales",updated);return updated;});
-    // Mark pig as sold and sync pigs to Firestore
-    if(form.pigId) setPigs(p=>{const updated=p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig);fsSet("pigs",updated);return updated;});
-    // Record capital income
-    if(setCapital) capitalTx(capital,setCapital,{type:"income",category:"Pig Sale",amount:Math.round(finalTotal),description:`${selPig?selPig.tag+", ":""}${form.weight}kg @ RWF ${form.priceKg}/kg to ${form.buyer||"buyer"}`,date:toDay()});
+    // Only mark pig as sold and record capital if admin-approved immediately
+    if(isAdmin){
+      if(form.pigId) setPigs(p=>{const updated=p.map(pig=>pig.id===form.pigId?{...pig,status:"sold"}:pig);fsSet("pigs",updated);return updated;});
+      if(setCapital) capitalTx(capital,setCapital,{type:"income",category:"Pig Sale",amount:Math.round(finalTotal),description:`${selPig?selPig.tag+", ":""}${form.weight}kg @ RWF ${form.priceKg}/kg to ${form.buyer||"buyer"}`,date:toDay()});
+    }
     try{
       await jbinAppend("sales",newSale);
-      setToast({type:"success",message:`Sale of RWF ${Math.round(newSale.total).toLocaleString()} recorded!`});
+      setToast({type:"success",message:isAdmin?`Sale of RWF ${Math.round(newSale.total).toLocaleString()} recorded!`:"✅ Sale submitted! Awaiting admin approval."});
       setSaved(true);
       setTimeout(()=>{setSaved(false);setForm({pigId:"",buyer:"",weight:"",priceKg:"",total:"",notes:""});},2000);
     }catch(e){setToast({type:"error",message:"Failed to save. Check internet and try again."});}
@@ -5043,6 +5214,7 @@ function BEntry({user,expenses,setExpenses,capital,setCapital}){
   function doSave(){
     setConfirm(false);
     if(!total||total<=0) return;
+    const isAdmin=user.role==="admin";
     const newExp={
       id:uid(),
       date:form.date,
@@ -5057,18 +5229,18 @@ function BEntry({user,expenses,setExpenses,capital,setCapital}){
       unitPrice:form.unitPrice,
       supplier:form.supplier,
       notes:form.notes,
-      source:"worker_purchase"
+      source:"worker_purchase",
+      approved:isAdmin?true:false
     };
-    // Sync to Firestore immediately so P&L, Dashboard, and Finance all update in real-time
     setExpenses(p=>{const updated=[...p,newExp];fsSet("expenses",updated);return updated;});
-    if(setCapital) capitalTx(capital,setCapital,{
+    if(isAdmin&&setCapital) capitalTx(capital,setCapital,{
       type:"expense",
       category:form.category,
       amount:total,
       description:`${form.item||form.category}${form.quantity?" "+form.quantity+" "+form.unit:""}${form.supplier?" from "+form.supplier:""} — by ${user.name}`,
       date:form.date
     });
-    setToast({type:"success",message:`✅ Purchase of ${fmtRWF(total)} recorded!`});
+    setToast({type:"success",message:isAdmin?`✅ Purchase of ${fmtRWF(total)} recorded!`:`✅ Purchase submitted! Awaiting admin approval.`});
     setSaved(true);
     setTimeout(()=>{
       setSaved(false);
@@ -5388,7 +5560,10 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
           ):(
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
               <div style={{flex:1}}>
-                <div style={{fontWeight:700,color:C.text,fontSize:13}}>🌾 {f.feedType} — {f.kg}kg</div>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2,flexWrap:"wrap"}}>
+                  <span style={{fontWeight:700,color:C.text,fontSize:13}}>🌾 {f.feedType} — {f.kg}kg</span>
+                  {f.approved===false&&<span style={{fontSize:10,padding:"2px 7px",borderRadius:10,background:"rgba(245,158,11,.15)",color:"#d97706",fontWeight:700}}>⏳ Pending</span>}
+                </div>
                 <div style={{fontSize:11,color:C.faint,marginTop:2}}>👷 {f.worker||workerName(f.workerId)} · {f.date} · {pig?"🐷 "+pig.tag:"All pigs"}</div>
                 {f.notes&&<div style={{fontSize:11,color:C.muted,marginTop:2,fontStyle:"italic"}}>"{f.notes}"</div>}
               </div>
@@ -5440,7 +5615,10 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
           ):(
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
               <div style={{flex:1}}>
-                <div style={{fontWeight:700,fontSize:13,color:C.text}}>📋 {l.worker} — {l.date}</div>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,flexWrap:"wrap"}}>
+                  <span style={{fontWeight:700,fontSize:13,color:C.text}}>📋 {l.worker} — {l.date}</span>
+                  {l.approved===false&&<span style={{fontSize:10,padding:"2px 7px",borderRadius:10,background:"rgba(245,158,11,.15)",color:"#d97706",fontWeight:700}}>⏳ Pending</span>}
+                </div>
                 <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:5,fontSize:11}}>
                   {[["✓ Checked",l.checked,C.accent],["🤒 Sick",l.sick,l.sick>0?C.red:C.muted],["💀 Deaths",l.deaths,l.deaths>0?C.red:C.muted],["🐣 Births",l.births,l.births>0?"#10b981":C.muted]].map(([lbl,val,col])=>(
                     <span key={lbl} style={{padding:"2px 8px",borderRadius:20,background:C.elevated,color:col,fontWeight:val>0?700:400}}>{lbl}: {val}</span>
@@ -5486,7 +5664,10 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
           ):(
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
               <div style={{flex:1}}>
-                <div style={{fontWeight:700,fontSize:13,color:C.text}}>🏷️ {pig?pig.tag:"—"} → {s.buyer||"—"}</div>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2,flexWrap:"wrap"}}>
+                  <span style={{fontWeight:700,fontSize:13,color:C.text}}>🏷️ {pig?pig.tag:"—"} → {s.buyer||"—"}</span>
+                  {s.approved===false&&<span style={{fontSize:10,padding:"2px 7px",borderRadius:10,background:"rgba(245,158,11,.15)",color:"#d97706",fontWeight:700}}>⏳ Pending</span>}
+                </div>
                 <div style={{fontSize:11,color:C.faint,marginTop:2}}>👷 {s.worker} · {s.date} · {s.weight}kg @ RWF{fmtNum(s.priceKg)}/kg</div>
               </div>
               <div style={{textAlign:"right"}}>
@@ -5548,6 +5729,7 @@ function AdminWorkerDataEditor({feeds,setFeeds,logs,setLogs,sales,setSales,expen
                     <span style={{fontWeight:700,fontSize:13,color:C.text}}>🛒 {e.item||e.category}</span>
                     <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:"rgba(239,68,68,.08)",color:C.red,fontWeight:600}}>{e.category}</span>
                     {e.source==="worker_purchase"&&<span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:"rgba(37,99,235,.08)",color:C.blue,fontWeight:600}}>👷 Worker</span>}
+                    {e.approved===false&&<span style={{fontSize:10,padding:"2px 7px",borderRadius:10,background:"rgba(245,158,11,.15)",color:"#d97706",fontWeight:700}}>⏳ Pending</span>}
                   </div>
                   <div style={{fontSize:11,color:C.faint,marginTop:3}}>
                     👤 {e.worker||"Admin"} · 📅 {e.date}
