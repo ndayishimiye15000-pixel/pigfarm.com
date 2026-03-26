@@ -365,7 +365,7 @@ function downloadPDF(type,data,label){
 }
 
 /* ─── Colors & Styles ─── */
-const C={base:"#f0f4f8",surface:"#ffffff",elevated:"#f8fafc",border:"#e2e8f0",borderSoft:"#f1f5f9",
+const C={base:"#f0f4f8",surface:"#ffffff",card:"#ffffff",elevated:"#f8fafc",border:"#e2e8f0",borderSoft:"#f1f5f9",
   accent:"#16a34a",accentSoft:"rgba(22,163,74,.08)",text:"#1e293b",muted:"#475569",faint:"#94a3b8",
   red:"#dc2626",amber:"#d97706",blue:"#2563eb",purple:"#7c3aed",pink:"#db2777"};
 const S={
@@ -403,7 +403,7 @@ function PDFBtn({label,type,getData,icon,color}){
 /* ─── AI Error Display Helper ─── */
 function AIErrorMsg({source,text,onSetKey}){
   if(source==="no_key") return(<div style={{padding:"11px 14px",background:"rgba(245,158,11,.08)",border:"1px solid rgba(245,158,11,.3)",borderRadius:8,fontSize:13,color:C.amber}}>
-    🔑 No API key set. <button onClick={onSetKey} style={{background:"none",border:"none",color:C.accent,cursor:"pointer",fontWeight:700,fontSize:13,padding:0,fontFamily:"inherit",textDecoration:"underline"}}>Click here to add your Anthropic API key</button> to enable live AI.
+    🔑 No API key set. <button onClick={onSetKey} style={{background:"none",border:"none",color:C.accent,cursor:"pointer",fontWeight:700,fontSize:13,padding:0,fontFamily:"inherit",textDecoration:"underline"}}>Click here to add your Groq API key</button> to enable live AI.
   </div>);
   if(source==="auth_error") return(<div style={{padding:"11px 14px",background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.3)",borderRadius:8,fontSize:13,color:C.red}}>
     🔑 Invalid API key. <button onClick={onSetKey} style={{background:"none",border:"none",color:C.accent,cursor:"pointer",fontWeight:700,fontSize:13,padding:0,fontFamily:"inherit",textDecoration:"underline"}}>Update your key</button>
@@ -517,7 +517,7 @@ function AIAdvisor({pigs,feeds,sales,logs,expenses,incomes,reproductions,stock})
   return(<div>
     {showKeyModal&&<ApiKeyModal onClose={()=>setShowKeyModal(false)}/>}
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-      <div><div style={S.h1}>🤖 AI Farm Advisor</div><div style={S.sub}>Live Claude AI — ask anything about your farm</div></div>
+      <div><div style={S.h1}>🤖 AI Farm Advisor</div><div style={S.sub}>Live AI Advisor (Groq) — ask anything about your farm</div></div>
       <AIStatusPill onSetKey={()=>setShowKeyModal(true)}/>
     </div>
 
@@ -539,7 +539,7 @@ function AIAdvisor({pigs,feeds,sales,logs,expenses,incomes,reproductions,stock})
           return(<div key={i} className="fade-in" style={{marginBottom:12,display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start",alignItems:"flex-start"}}>
             {m.role==="ai"&&<div style={{width:27,height:27,borderRadius:"50%",background:"rgba(22,163,74,.15)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,marginRight:9,flexShrink:0}}>🤖</div>}
             <div style={{maxWidth:"76%"}}>
-              {m.role==="ai"&&<div style={{fontSize:10,color:isErr?C.amber:C.accent,marginBottom:3,fontWeight:600}}>{isErr?"⚠️ Error":"✦ Claude AI · Live"}</div>}
+              {m.role==="ai"&&<div style={{fontSize:10,color:isErr?C.amber:C.accent,marginBottom:3,fontWeight:600}}>{isErr?"⚠️ Error":"✦ Groq AI · Live"}</div>}
               {isErr
                 ?<AIErrorMsg source={m.source} text={m.text} onSetKey={()=>setShowKeyModal(true)}/>
                 :<div style={{padding:"10px 13px",borderRadius:11,background:m.role==="user"?"#dbeafe":C.elevated,border:"1px solid "+(m.role==="user"?"#93c5fd":C.border),fontSize:13,color:C.text,lineHeight:1.7,whiteSpace:"pre-wrap"}}>{m.text}</div>
@@ -548,7 +548,7 @@ function AIAdvisor({pigs,feeds,sales,logs,expenses,incomes,reproductions,stock})
             {m.role==="user"&&<div style={{width:27,height:27,borderRadius:"50%",background:C.accent,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,marginLeft:9,flexShrink:0,color:"#fff",fontWeight:700}}>U</div>}
           </div>);
         })}
-        {loading&&<div style={{display:"flex",alignItems:"center",gap:9,color:C.accent,fontSize:13,paddingLeft:36}}><span className="spin" style={S.loader}></span>Claude is thinking…</div>}
+        {loading&&<div style={{display:"flex",alignItems:"center",gap:9,color:C.accent,fontSize:13,paddingLeft:36}}><span className="spin" style={S.loader}></span>AI is thinking…</div>}
         <div ref={ref}/>
       </div>
       <div style={{display:"flex",gap:9}}>
@@ -582,6 +582,8 @@ function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,log
   const [tab,setTab]=useState("overview");
   const [form,setForm]=useState({sowId:"",boarId:"",matingDate:toDay(),notes:"",method:"Natural Service"});
   const [saved,setSaved]=useState(false);
+  const [farrowingId,setFarrowingId]=useState(null);
+  const [pigletCount,setPigletCount]=useState("10");
   const sows=pigs.filter(p=>p.status==="active"&&(p.stage==="Sow"||p.stage==="Gilt"));
   const boars=pigs.filter(p=>p.status==="active"&&p.stage==="Boar");
 
@@ -754,10 +756,19 @@ function ReproductionModule({pigs,reproductions,setReproductions,feeds,sales,log
               </div>
             ))}
           </div>
-          <div style={{display:"flex",gap:7}}>
-            <button style={{...S.btn(C.accent),flex:1,padding:9,fontSize:12}} onClick={()=>{const n=parseInt(prompt("How many piglets born?","10")||"10");updateStatus(r.id,"farrowed",n);}}>✅ Mark Farrowed</button>
-            <button style={{...S.btn(C.red),padding:"9px 14px",fontSize:12}} onClick={()=>{if(confirm("Mark as failed/aborted?"))updateStatus(r.id,"failed",0);}}>✗ Failed</button>
-          </div>
+          {farrowingId===r.id?(
+            <div style={{display:"flex",gap:7,alignItems:"center",padding:"8px",background:"rgba(22,163,74,.06)",borderRadius:8,border:"1px solid rgba(22,163,74,.25)"}}>
+              <span style={{fontSize:12,color:C.muted,flexShrink:0}}>🐷 Piglets born:</span>
+              <input type="number" min="1" max="30" value={pigletCount} onChange={e=>setPigletCount(e.target.value)} style={{...S.inp,width:70,padding:"5px 8px",fontSize:13,textAlign:"center"}} autoFocus/>
+              <button style={{...S.btn(C.accent),padding:"7px 14px",fontSize:12,flexShrink:0}} onClick={()=>{updateStatus(r.id,"farrowed",parseInt(pigletCount)||10);setFarrowingId(null);setPigletCount("10");}}>✅ Confirm</button>
+              <button style={{...S.btn("#6b7280"),padding:"7px 10px",fontSize:12,flexShrink:0}} onClick={()=>{setFarrowingId(null);setPigletCount("10");}}>Cancel</button>
+            </div>
+          ):(
+            <div style={{display:"flex",gap:7}}>
+              <button style={{...S.btn(C.accent),flex:1,padding:9,fontSize:12}} onClick={()=>{setFarrowingId(r.id);setPigletCount("10");}}>✅ Mark Farrowed</button>
+              <button style={{...S.btn(C.red),padding:"9px 14px",fontSize:12}} onClick={()=>{if(window.confirm("Mark as failed/aborted?"))updateStatus(r.id,"failed",0);}}>✗ Failed</button>
+            </div>
+          )}
           {r.notes&&<div style={{fontSize:11,color:C.faint,marginTop:8,fontStyle:"italic",padding:"5px 9px",background:C.elevated,borderRadius:6}}>📝 {r.notes}</div>}
         </div>);
       })}
@@ -4709,7 +4720,7 @@ function SaleLog({sales,setSales,pigs,feeds,logs,expenses,incomes,allData,user})
                 <span style={{color:"#10b981",fontWeight:700}}>{fmtRWF(s.total)}</span>
                 {isAdmin&&<div style={{display:"flex",gap:5,marginTop:4,justifyContent:"flex-end"}}>
                   <button onClick={()=>{setEditId(s.id);setEditForm({buyer:s.buyer||"",weight:String(s.weight||""),priceKg:String(s.priceKg||""),date:s.date});}} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid "+C.border,background:"transparent",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>✏️ Edit</button>
-                  <button onClick={()=>{if(window.confirm("Delete this sale record?"))setSales(p=>p.filter(x=>x.id!==s.id));}} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>
+                  <button onClick={()=>{if(window.confirm("Delete this sale record?")){const u=sales.filter(x=>x.id!==s.id);setSales(u);fsSet("sales",u);}}} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>
                 </div>}
               </div>
             </>
@@ -4737,7 +4748,7 @@ function DLogs({logs,setLogs,pigs,feeds,sales,expenses,incomes,allData,user}){
           <div style={{fontWeight:700}}>{log.worker}</div>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
             <span style={{fontSize:11,color:C.faint}}>{log.date}</span>
-            {isAdmin&&<button onClick={()=>{if(window.confirm("Delete this log?"))setLogs(p=>p.filter(l=>l.id!==log.id));}} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>}
+            {isAdmin&&<button onClick={()=>{if(window.confirm("Delete this log?")){const u=logs.filter(l=>l.id!==log.id);setLogs(u);fsSet("logs",u);}}} style={{fontSize:10,padding:"2px 8px",borderRadius:5,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>}
           </div>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:7,marginBottom:7}}>
@@ -4903,7 +4914,7 @@ function WHome({user,logs,feeds,sales,messages}){
     </div>}
     {!ml.some(l=>l.date===toDay())&&<div style={{padding:"11px 14px",background:"rgba(245,158,11,.08)",border:"1px solid rgba(245,158,11,.3)",borderRadius:9,marginBottom:14,color:C.amber,fontSize:13}}>⚠️ Please submit your daily report today!</div>}
     <div style={S.g4}>
-      {[{l:"Daily Reports",v:ml.length,c:C.accent},{l:"Feeding Logs",v:mf.length,c:C.amber},{l:"Sales",v:ms.length,c:"#10b981"},{l:"My Revenue",v:fmtRWF(ms.reduce((s,l)=>s+l.total,0)),c:C.purple}].map(s=>(
+      {[{l:"Daily Reports",v:ml.length,c:C.accent},{l:"Feeding Logs",v:mf.length,c:C.amber},{l:"Sales",v:ms.length,c:"#10b981"},{l:"My Revenue",v:fmtRWF(ms.reduce((s,l)=>s+(l.total||0),0)),c:C.purple}].map(s=>(
         <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
       ))}
     </div>
@@ -5054,7 +5065,7 @@ function FEntry({user,pigs,feeds,setFeeds,capital,setCapital}){
   const suggestedKg=selPig?(STAGE_FEED[selPig.stage]||2.0):null;
 
   const histFeeds=feeds.filter(f=>f.feedType===form.feedType&&f.kg>0&&f.cost>0);
-  const histAvgCpk=histFeeds.length>0?Math.round(histFeeds.reduce((s,f)=>s+f.cost/f.kg,0)/histFeeds.length):null;
+  const histAvgCpk=histFeeds.length>0?Math.round(histFeeds.reduce((s,f)=>s+(f.kg>0?f.cost/f.kg:0),0)/histFeeds.length):null;
 
   async function doSave(){
     setConfirm(false);
