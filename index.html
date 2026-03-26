@@ -1503,7 +1503,7 @@ function ProfitLossAnalysis({pigs,feeds,sales,logs,expenses,incomes,reproduction
 }
 
 /* ─── LEDGER ─── */
-function Ledger({expenses,setExpenses,incomes,setIncomes,feeds,sales,capital,setCapital}){
+function Ledger({expenses,setExpenses,incomes,setIncomes,feeds,setFeeds,sales,setSales,capital,setCapital}){
   const [tab,setTab]=useState("overview");
   const [eForm,setEForm]=useState({date:toDay(),category:"Feed Purchase",amount:"",description:""});
   const [iForm,setIForm]=useState({date:toDay(),category:"Pig Sale",amount:"",description:""});
@@ -1738,10 +1738,15 @@ function Ledger({expenses,setExpenses,incomes,setIncomes,feeds,sales,capital,set
                 <div style={{textAlign:"right",flexShrink:0}}>
                   <div style={{fontWeight:700,color:tx.type==="income"?"#10b981":C.red,fontSize:14}}>{tx.type==="income"?"+":"-"}{fmtRWF(tx.amount)}</div>
                   <div style={{fontSize:10,color:C.faint,marginTop:1}}>Bal: {fmtRWF(tx.runBal)}</div>
-                  {(tx.src==="income"||tx.src==="expense")&&<div style={{display:"flex",gap:4,marginTop:4,justifyContent:"flex-end"}}>
-                    <button onClick={()=>setEditItem({...tx})} style={{fontSize:10,padding:"2px 7px",borderRadius:5,border:"1px solid "+C.border,background:"transparent",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>✏️</button>
-                    <button onClick={()=>{if(window.confirm("Delete this record?"))tx.src==="income"?deleteIncome(tx.id):deleteExpense(tx.id);}} style={{fontSize:10,padding:"2px 7px",borderRadius:5,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>
-                  </div>}
+                  <div style={{display:"flex",gap:4,marginTop:4,justifyContent:"flex-end"}}>
+                    {(tx.src==="income"||tx.src==="expense")&&<button onClick={()=>setEditItem({...tx})} style={{fontSize:10,padding:"2px 7px",borderRadius:5,border:"1px solid "+C.border,background:"transparent",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>✏️</button>}
+                    <button onClick={()=>{if(window.confirm("Delete this record? This will reverse the capital effect.")){
+                      if(tx.src==="income") deleteIncome(tx.id);
+                      else if(tx.src==="expense") deleteExpense(tx.id);
+                      else if(tx.src==="sale"){setSales(p=>{const u=p.filter(s=>s.id!==tx.id);fsSet("sales",u);return u;});}
+                      else if(tx.src==="feed"){setFeeds(p=>{const u=p.filter(f=>f.id!==tx.id);fsSet("feeds",u);return u;});}
+                    }}} style={{fontSize:10,padding:"2px 7px",borderRadius:5,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:C.red,cursor:"pointer",fontFamily:"inherit"}}>🗑️</button>
+                  </div>
                 </div>
               </div>
             )}
@@ -2395,7 +2400,7 @@ function App(){
       {isAdmin&&page==="market"&&<RwandaMarket pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock} capital={capital}/>}
       {isAdmin&&page==="reproduction"&&<ReproductionModule pigs={pigs} reproductions={reproductions} setReproductions={setReproductions} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} stock={stock} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="stock"&&<StockManager stock={stock} setStock={setStock} feeds={feeds} pigs={pigs} capital={capital} setCapital={setCapital}/>}
-      {isAdmin&&page==="ledger"&&<Ledger expenses={expenses} setExpenses={setExpenses} incomes={incomes} setIncomes={setIncomes} feeds={feeds} sales={sales} capital={capital} setCapital={setCapital}/>}
+      {isAdmin&&page==="ledger"&&<Ledger expenses={expenses} setExpenses={setExpenses} incomes={incomes} setIncomes={setIncomes} feeds={feeds} setFeeds={setFeeds} sales={sales} setSales={setSales} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="finance"&&<Fin feeds={feeds} sales={sales} pigs={pigs} logs={logs} expenses={expenses} incomes={incomes} allData={allData} capital={capital}/>}
       {isAdmin&&page==="pigs"&&<Pigs pigs={pigs} setPigs={setPigs} logs={logs} allData={allData} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="feeding"&&<FeedLog feeds={feeds} setFeeds={setFeeds} pigs={pigs} logs={logs} sales={sales} expenses={expenses} incomes={incomes} allData={allData} user={user}/>}
