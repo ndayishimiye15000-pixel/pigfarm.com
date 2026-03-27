@@ -127,6 +127,17 @@ async function sendWhatsApp(message){
   }
 }
 function isWAEnabled(){const c=getWAConfig();return !!(c.enabled&&c.phone&&c.apikey);}
+function getWorkerWAContacts(){
+  try{return JSON.parse(localStorage.getItem("farmiq_wa_workers")||"[]");}
+  catch{return [];}
+}
+function setWorkerWAContacts(list){
+  localStorage.setItem("farmiq_wa_workers",JSON.stringify(list));
+}
+async function sendWhatsAppToNumber(phone,apikey,message){
+  const url=`https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}&apikey=${encodeURIComponent(apikey)}`;
+  try{await fetch(url,{method:"GET",mode:"no-cors"});return true;}catch{return false;}
+}
 function getWAAlertPrefs(){
   const c=getWAConfig();
   return{
@@ -3191,6 +3202,118 @@ function PigAssessmentHistory({pigs,setPigs,assessments,setAssessments,users}){
 /* ═══════════════════════════════════════════════════
    WHATSAPP ALERTS SETTINGS (CallMeBot)
 ═══════════════════════════════════════════════════ */
+function WorkerWAContacts(){
+  const [contacts,setContacts]=useState(()=>getWorkerWAContacts());
+  const [newName,setNewName]=useState("");
+  const [newPhone,setNewPhone]=useState("");
+  const [newApiKey,setNewApiKey]=useState("");
+  const [broadcastMsg,setBroadcastMsg]=useState("");
+  const [sending,setSending]=useState(false);
+  const [sendStatus,setSendStatus]=useState("");
+  const [showAdd,setShowAdd]=useState(false);
+
+  function addContact(){
+    if(!newName.trim()||!newPhone.trim()||!newApiKey.trim())return;
+    const updated=[...contacts,{id:uid(),name:newName.trim(),phone:newPhone.trim(),apikey:newApiKey.trim()}];
+    setContacts(updated);setWorkerWAContacts(updated);
+    setNewName("");setNewPhone("");setNewApiKey("");setShowAdd(false);
+  }
+  function removeContact(id){
+    const updated=contacts.filter(c=>c.id!==id);
+    setContacts(updated);setWorkerWAContacts(updated);
+  }
+
+  async function broadcast(){
+    if(!broadcastMsg.trim()||contacts.length===0)return;
+    setSending(true);setSendStatus("");
+    const msg=`📢 FarmIQ — ${toDay()}\n${broadcastMsg.trim()}`;
+    let sent=0;
+    for(const c of contacts){
+      const ok=await sendWhatsAppToNumber(c.phone,c.apikey,msg);
+      if(ok)sent++;
+      await new Promise(r=>setTimeout(r,800));// small delay between sends
+    }
+    setSendStatus(`✅ Message sent to ${sent}/${contacts.length} worker(s). Check their WhatsApp.`);
+    setBroadcastMsg("");
+    setSending(false);
+    setTimeout(()=>setSendStatus(""),6000);
+  }
+
+  return(<>
+    {/* Worker Contacts Card */}
+    <div style={S.card}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.text}}>👷 Worker WhatsApp Contacts</div>
+        <button onClick={()=>setShowAdd(p=>!p)} style={{...S.btn(C.accent),padding:"5px 12px",fontSize:11}}>
+          {showAdd?"✕ Cancel":"➕ Add Worker"}
+        </button>
+      </div>
+      <div style={{fontSize:11,color:C.faint,marginBottom:10}}>
+        Each worker must activate CallMeBot once (send <span style={{fontFamily:"monospace",background:C.elevated,padding:"1px 5px",borderRadius:3}}>I allow callmebot to send me messages</span> to <b>+34 644 65 00 63</b>) to get their API key.
+      </div>
+
+      {showAdd&&<div style={{background:"rgba(22,163,74,.05)",border:"1px solid rgba(22,163,74,.2)",borderRadius:9,padding:12,marginBottom:12}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.accent,marginBottom:10}}>➕ Add Worker Contact</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:9}}>
+          <div>
+            <label style={S.lbl}>Worker Name</label>
+            <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="e.g. Jean Pierre" style={S.inp}/>
+          </div>
+          <div>
+            <label style={S.lbl}>📞 WhatsApp Phone</label>
+            <input value={newPhone} onChange={e=>setNewPhone(e.target.value)} placeholder="+250788123456" style={S.inp}/>
+          </div>
+        </div>
+        <div style={{marginBottom:9}}>
+          <label style={S.lbl}>🔑 Worker's CallMeBot API Key</label>
+          <input value={newApiKey} onChange={e=>setNewApiKey(e.target.value)} placeholder="Worker's personal API key from CallMeBot" style={S.inp}/>
+        </div>
+        <button onClick={addContact} disabled={!newName||!newPhone||!newApiKey} style={{...S.btn(C.accent),width:"100%"}}>
+          💾 Save Worker Contact
+        </button>
+      </div>}
+
+      {contacts.length===0&&!showAdd&&<div style={{color:C.faint,fontSize:13,textAlign:"center",padding:"10px 0"}}>No worker contacts yet. Add workers above.</div>}
+      {contacts.map(c=>(
+        <div key={c.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 12px",background:C.elevated,borderRadius:8,marginBottom:7,border:"1px solid "+C.border}}>
+          <div>
+            <div style={{fontWeight:600,fontSize:13,color:C.text}}>👤 {c.name}</div>
+            <div style={{fontSize:11,color:C.faint}}>{c.phone}</div>
+          </div>
+          <button onClick={()=>removeContact(c.id)} style={{...S.btn(C.red),padding:"4px 10px",fontSize:11}}>Remove</button>
+        </div>
+      ))}
+    </div>
+
+    {/* Broadcast Message Card */}
+    <div style={{...S.card,background:"linear-gradient(135deg,rgba(37,211,102,.06),rgba(22,163,74,.03))",border:"1px solid rgba(37,211,102,.25)"}}>
+      <div style={{fontSize:13,fontWeight:700,color:"#128C7E",marginBottom:6}}>📢 Send Message to Workers</div>
+      <div style={{fontSize:11,color:C.faint,marginBottom:12}}>
+        Type a message and send it directly to all {contacts.length} worker(s) via WhatsApp.
+      </div>
+      <textarea
+        value={broadcastMsg}
+        onChange={e=>setBroadcastMsg(e.target.value)}
+        placeholder="Type your message to workers here…\ne.g. Please check pigs in pen 3 today. Make sure feeding is done by 8am."
+        rows={4}
+        style={{...S.inp,resize:"vertical",lineHeight:1.6,marginBottom:10}}
+      />
+      <button
+        onClick={broadcast}
+        disabled={sending||!broadcastMsg.trim()||contacts.length===0}
+        style={{...S.btn("#128C7E"),width:"100%",opacity:(sending||!broadcastMsg.trim()||contacts.length===0)?0.6:1}}
+      >
+        {sending
+          ?<><span className="spin" style={{...S.loader,borderTopColor:"#fff"}}/>Sending to {contacts.length} worker(s)…</>
+          :`📱 Send to ${contacts.length} Worker(s)`
+        }
+      </button>
+      {contacts.length===0&&<div style={{marginTop:8,fontSize:11,color:C.amber,textAlign:"center"}}>⚠️ Add worker contacts above first.</div>}
+      {sendStatus&&<div style={{marginTop:10,padding:"8px 12px",background:"rgba(37,211,102,.08)",border:"1px solid rgba(37,211,102,.3)",borderRadius:7,fontSize:12,color:"#128C7E"}}>{sendStatus}</div>}
+    </div>
+  </>);
+}
+
 function WhatsAppSettings({pigs,feeds,logs,sales,expenses,incomes,reproductions,stock}){
   const saved=getWAConfig();
   const [phone,setPhone]=useState(saved.phone||"");
@@ -3310,6 +3433,9 @@ function WhatsAppSettings({pigs,feeds,logs,sales,expenses,incomes,reproductions,
         <b>Status:</b> {enabled&&phone&&apikey?"✅ WhatsApp alerts are active. FarmIQ will send you messages for selected events.":"⚠️ WhatsApp alerts are inactive. "+(!phone?"Enter your phone number. ":"")+(!apikey?"Enter your API key. ":"")+(!enabled?"Toggle 'Enabled' above. ":"")}
       </div>
     </div>
+
+    {/* Worker WhatsApp Contacts */}
+    <WorkerWAContacts/>
   </div>);
 }
 
