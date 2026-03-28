@@ -36,7 +36,6 @@ select option{background:#fff;color:#1e293b;}
 @keyframes glow{0%,100%{box-shadow:0 0 10px rgba(22,163,74,.08);}50%{box-shadow:0 0 20px rgba(22,163,74,.18);}}
 @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.6;}}
 @keyframes slideUp{from{opacity:0;transform:translateY(16px);}to{opacity:1;transform:translateY(0);}}
-@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
 .spin{animation:spin .9s linear infinite;display:inline-block;}
 .fade-in{animation:fadeIn .35s ease both;}
 .slide-up{animation:slideUp .4s ease both;}
@@ -102,82 +101,6 @@ function genPigTag(breed,stage,existingPigs){
 }
 const fmtRWF=(n)=>"RWF "+Math.round(n||0).toLocaleString();
 const fmtNum=(n)=>Math.round(n||0).toLocaleString();
-
-/* ══════════════════════════════════════════════════════
-   🔐 SECURITY LAYER
-   • SHA-256 password hashing  (Web Crypto API — no library)
-   • Login rate limiter         (5 attempts → 15 min lockout)
-   • Session expiry             (8 h inactivity auto-logout)
-   • Shimmer skeleton           (loading UX)
-══════════════════════════════════════════════════════ */
-
-/* ── Password hashing ── */
-async function hashPassword(pwd){
-  const buf=await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(pwd+"farmiq_rw_salt_2025")
-  );
-  return Array.from(new Uint8Array(buf))
-    .map(b=>b.toString(16).padStart(2,"0")).join("");
-}
-// Check if a stored value is already a hash (64 hex chars) or plain text
-function isHashed(p){return typeof p==="string"&&/^[0-9a-f]{64}$/.test(p);}
-async function verifyPassword(plain,stored){
-  if(!plain||!stored) return false;
-  if(isHashed(stored)) return (await hashPassword(plain))===stored;
-  return plain===stored; // legacy plain-text fallback
-}
-
-/* ── Rate limiter ── */
-const RL_KEY="farmiq_login_rl";
-function getRLStore(){try{return JSON.parse(localStorage.getItem(RL_KEY)||"{}");}catch{return {};}}
-function saveRLStore(s){try{localStorage.setItem(RL_KEY,JSON.stringify(s));}catch{}}
-function rlCheck(username){
-  const s=getRLStore();
-  const a=s[username.toLowerCase()];
-  if(!a) return {locked:false,remaining:5};
-  if(a.lockedUntil&&Date.now()<a.lockedUntil){
-    const mins=Math.ceil((a.lockedUntil-Date.now())/60000);
-    return {locked:true,mins};
-  }
-  if(a.lockedUntil&&Date.now()>=a.lockedUntil){
-    delete s[username.toLowerCase()];saveRLStore(s);
-    return {locked:false,remaining:5};
-  }
-  return {locked:false,remaining:Math.max(0,5-a.count)};
-}
-function rlFail(username){
-  const s=getRLStore();
-  const key=username.toLowerCase();
-  const a=s[key]||{count:0};
-  a.count=(a.count||0)+1;
-  if(a.count>=5) a.lockedUntil=Date.now()+15*60*1000;
-  s[key]=a;saveRLStore(s);
-}
-function rlClear(username){
-  const s=getRLStore();
-  delete s[username.toLowerCase()];saveRLStore(s);
-}
-
-/* ── Session expiry (8 h) ── */
-const SESSION_KEY="farmiq_session_ts";
-const SESSION_MAX=8*60*60*1000;
-function sessionTouch(){try{localStorage.setItem(SESSION_KEY,String(Date.now()));}catch{}}
-function sessionExpired(){
-  try{
-    const ts=parseInt(localStorage.getItem(SESSION_KEY)||"0");
-    return ts>0&&(Date.now()-ts)>SESSION_MAX;
-  }catch{return false;}
-}
-function sessionClear(){try{localStorage.removeItem(SESSION_KEY);}catch{}}
-
-/* ── Shimmer skeleton ── */
-function Skeleton({h=14,w="100%",mb=8,br=6}){
-  return <div style={{height:h,width:w,borderRadius:br,marginBottom:mb,
-    background:"linear-gradient(90deg,#f0f4f8 25%,#e8edf5 50%,#f0f4f8 75%)",
-    backgroundSize:"200% 100%",animation:"shimmer 1.3s infinite linear"
-  }}/>;
-}
 
 /* ─── CallMeBot WhatsApp Integration ──────────────────────────────────────
    Sends WhatsApp messages via CallMeBot free API.
@@ -288,7 +211,7 @@ function calcPnL(capital,feeds,sales,expenses,incomes){
 }
 
 /* ─── Initial Data ─── */
-const INIT_USERS=[{id:"a1",name:"Farm Owner",username:"admin",password:"FarmIQ@Rw2025!",role:"admin",approved:true}];
+const INIT_USERS=[{id:"a1",name:"Farm Owner",username:"admin",password:"admin123",role:"admin",approved:true}];
 const INIT_PIGS=[
   {id:"p1",tag:"RW-001",breed:"Landrace",gender:"Female",stage:"Sow",weight:120,status:"active",dob:"2022-03-10"},
   {id:"p2",tag:"RW-002",breed:"Large White",gender:"Male",stage:"Boar",weight:145,status:"active",dob:"2021-11-05"},
@@ -3812,16 +3735,6 @@ function App(){
     <div style={{width:120,height:3,background:"rgba(255,255,255,.1)",borderRadius:3,overflow:"hidden"}}><div style={{width:"60%",height:"100%",background:"#4ade80",borderRadius:3,animation:"spin 1s linear infinite"}}/></div>
   </div>);
 
-  // Session expiry check — force logout after 8h inactivity
-  useEffect(()=>{
-    if(user&&sessionExpired()){setUser(null);sessionClear();return;}
-    if(user) sessionTouch();
-    const t=setInterval(()=>{if(user&&sessionExpired()){setUser(null);sessionClear();}},60000);
-    const touch=()=>user&&sessionTouch();
-    window.addEventListener("click",touch);window.addEventListener("keydown",touch);
-    return()=>{clearInterval(t);window.removeEventListener("click",touch);window.removeEventListener("keydown",touch);};
-  },[user]);
-
   if(!user)return <Login users={users} setUsers={setUsers} setUser={setUser}/>;
   const isAdmin=user.role==="admin";
   const pending=users.filter(u=>u.role==="worker"&&!u.approved);
@@ -3835,50 +3748,7 @@ function App(){
   const alerts_sick=logs.filter(l=>l.date===toDay()&&l.sick>0).reduce((s,l)=>s+(l.sick||0),0);
   const alerts_stock=(stock||[]).filter(s=>s.quantity<=s.minLevel).length;
   const alerts_count=alerts_overdue+Math.min(alerts_sick,1)+Math.min(alerts_stock,1)+Math.min(pendingDataCount,1);
-  // Grouped admin nav with section headers
-  const adminNavGroups=[
-    {section:"📊 Overview",items:[
-      {id:"home",l:"📊 Overview"},
-      {id:"alerts",l:"🚨 Smart Alerts"},
-      {id:"weekly",l:"📊 Weekly Report"},
-    ]},
-    {section:"🐷 Farm",items:[
-      {id:"pigs",l:"🐷 Pigs"},
-      {id:"vaccination",l:"💉 Vaccinations"+(vaccinations.filter(v=>daysDiff(v.nextDue)<=7&&daysDiff(v.nextDue)>=0).length?" 🔔":"")},
-      {id:"reproduction",l:"🍼 Reproduction"},
-      {id:"assessmenthistory",l:"📏 Growth"+(assessments.filter(a=>a.approved===false).length?" 🔴"+assessments.filter(a=>a.approved===false).length:"")},
-      {id:"adminlog",l:"📝 Add Daily Log"},
-      {id:"daylogs",l:"📋 Daily Logs"},
-    ]},
-    {section:"💰 Finance",items:[
-      {id:"capital",l:"💵 Capital"},
-      {id:"finance",l:"💰 Financials"},
-      {id:"adminfeed",l:"🌾 Add Feed Log"},
-      {id:"feeding",l:"🌾 Feed History"},
-      {id:"adminsell",l:"💰 Record Sale"},
-      {id:"adminbuy",l:"🛒 Record Purchase"},
-      {id:"sales",l:"🏷️ Sales"},
-      {id:"stock",l:"📦 Stock"},
-      {id:"insight",l:"💡 Profit Insight"},
-    ]},
-    {section:"👷 Workers",items:[
-      {id:"workers",l:"👷 Workers"+(pending.length?" ("+pending.length+")":"")},
-      {id:"tasks",l:"✅ Tasks"+(tasks.filter(t=>t.status==="pending").length?" ("+tasks.filter(t=>t.status==="pending").length+")":"")},
-      {id:"messages",l:"📢 Messages"+(messages.length?" ("+messages.length+")":"")},
-      {id:"performance",l:"👷 Performance"},
-      {id:"workerdata",l:"🛠️ Edit Worker Data"},
-      {id:"remote",l:"🖥️ Remote Work"+(sessions.filter(s=>s.status==="pending").length?" ⚠️"+sessions.filter(s=>s.status==="pending").length:"")},
-    ]},
-    {section:"⚙️ Settings",items:[
-      {id:"whatsapp",l:"📱 WhatsApp"+(isWAEnabled()?" 🟢":"")},
-      {id:"changepassword",l:"🔒 Change Password"},
-      {id:"market",l:"🏪 Rwanda Market"},
-    ]},
-  ];
   const adminNav=[
-    {id:"home",l:"📊 Overview"},
-    {id:"alerts",l:"🚨 Smart Alerts"},
-    {id:"capital",l:"💵 Capital"},
     {id:"home",l:"📊 Overview"},
     {id:"alerts",l:"🔔 Alerts"+(alerts_count>0?" ("+alerts_count+")":"")},
     {id:"profitinsight",l:"💡 Profit Insight"},
@@ -3985,15 +3855,7 @@ function App(){
           {getApiKey()?"✦ AI Online · Groq":"🔑 Set Groq Key"}
         </button>
       </div>
-      {isAdmin
-        ? adminNavGroups.map(group=>(
-            <div key={group.section}>
-              <div style={{padding:"8px 18px 3px",fontSize:9,color:"rgba(255,255,255,.35)",textTransform:"uppercase",letterSpacing:1.2,fontWeight:700,marginTop:4}}>{group.section}</div>
-              {group.items.map(n=><button key={n.id} style={S.nb(page===n.id)} onClick={()=>setPage(n.id)}>{n.l}</button>)}
-            </div>
-          ))
-        : nav.map(n=><button key={n.id} style={S.nb(page===n.id)} onClick={()=>setPage(n.id)}>{n.l}</button>)
-      }
+      {nav.map(n=><button key={n.id} style={S.nb(page===n.id)} onClick={()=>setPage(n.id)}>{n.l}</button>)}
       {isAdmin&&(<div style={{padding:"12px 18px",borderTop:"1px solid rgba(255,255,255,.12)",marginTop:6,flexShrink:0}}>
         <div style={{fontSize:9,color:"rgba(255,255,255,.45)",textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>📄 Download Reports</div>
         <PDFBtn label="Full Report" type="farm" getData={()=>allData} icon="📄" color="#2d6a4f"/>
@@ -4002,7 +3864,7 @@ function App(){
       <div style={S.ui}>
         <div style={{fontSize:13,fontWeight:600,color:"#fff"}}>{user.name}</div>
         <div style={{fontSize:11,color:"rgba(255,255,255,.5)",marginBottom:8,textTransform:"capitalize"}}>{user.role}</div>
-        <button style={{...S.btn("#991b1b"),fontSize:12,padding:"6px 13px"}} onClick={()=>{sessionClear();setUser(null);}}>Sign Out</button>
+        <button style={{...S.btn("#991b1b"),fontSize:12,padding:"6px 13px"}} onClick={()=>setUser(null)}>Sign Out</button>
       </div>
     </div>
     <div style={S.main}>
@@ -4078,7 +3940,7 @@ function App(){
       {isAdmin&&page==="adminsell"&&<SEntry user={user} pigs={pigs} setPigs={setPigs} sales={sales} setSales={setSales} capital={capital} setCapital={setCapital}/>}
       {isAdmin&&page==="adminfeed"&&<FEntry user={user} pigs={pigs} feeds={feeds} setFeeds={setFeeds} capital={capital} setCapital={setCapital} tasks={tasks} setTasks={setTasks}/>}
       {isAdmin&&page==="adminlog"&&<DEntry user={user} pigs={pigs} logs={logs} setLogs={setLogs} capital={capital} setCapital={setCapital}/>}
-      {!isAdmin&&page==="home"&&<WHome user={user} logs={logs} feeds={feeds} sales={sales} messages={messages} tasks={tasks}/>}
+      {!isAdmin&&page==="home"&&<WHome user={user} logs={logs} feeds={feeds} sales={sales} messages={messages}/>}
       {!isAdmin&&page==="inbox"&&<WorkerInbox messages={messages} setMessages={setMessages} user={user}/>}
       {!isAdmin&&page==="dailyentry"&&<DEntry user={user} pigs={pigs} logs={logs} setLogs={setLogs} capital={capital} setCapital={setCapital}/>}
       {!isAdmin&&page==="feedentry"&&<FEntry user={user} pigs={pigs} feeds={feeds} setFeeds={setFeeds} capital={capital} setCapital={setCapital} tasks={tasks} setTasks={setTasks}/>}
@@ -5333,83 +5195,90 @@ function Login({users,setUsers,setUser}){
   const [err,setErr]=useState("");
   const [ok,setOk]=useState("");
   const [loading,setLoading]=useState(false);
-  const [showPw,setShowPw]=useState(false);
-  const [showPw2,setShowPw2]=useState(false);
-  const [pwStrength,setPwStrength]=useState(0); // 0-4
-  const [lockMsg,setLockMsg]=useState("");
-
-  function calcStrength(pw){
-    let s=0;
-    if(pw.length>=8) s++;
-    if(/[A-Z]/.test(pw)) s++;
-    if(/[0-9]/.test(pw)) s++;
-    if(/[^A-Za-z0-9]/.test(pw)) s++;
-    return s;
-  }
-  const strengthLabel=["","Weak","Fair","Good","Strong"];
-  const strengthColor=["","#ef4444","#f59e0b","#3b82f6","#16a34a"];
 
   async function login(){
-    setErr("");setLockMsg("");
+    setErr("");
     if(!form.username||!form.password) return setErr("Please enter username and password.");
-    const rl=rlCheck(form.username);
-    if(rl.locked) return setLockMsg(`🔒 Account locked. Try again in ${rl.mins} min.`);
-    if(rl.remaining<=2&&rl.remaining>0) setLockMsg(`⚠️ ${rl.remaining} attempt(s) left before lockout.`);
     setLoading(true);
-    // Admin check (hardcoded fallback)
-    const localMatch=INIT_USERS.find(u=>u.username.toLowerCase()===form.username.toLowerCase());
-    if(localMatch){
-      const ok2=await verifyPassword(form.password,localMatch.password);
-      if(ok2){rlClear(form.username);sessionTouch();setLoading(false);setUser(localMatch);return;}
-    }
-    // Worker check from JSONBin
+    // First check INIT_USERS (admin always works from hardcoded credentials)
+    const localMatch=INIT_USERS.find(u=>u.username.toLowerCase()===form.username.toLowerCase()&&u.password===form.password);
+    if(localMatch){setLoading(false);setUser(localMatch);return;}
+    // Then check JSONBin for workers
     let freshUsers=await getOnlineUsers();
     if(!freshUsers||freshUsers.length===0) freshUsers=users;
-    const u=freshUsers.find(u=>u.username.toLowerCase()===form.username.toLowerCase());
-    const match=u&&(await verifyPassword(form.password,u.password));
+    const u=freshUsers.find(u=>u.username.toLowerCase()===form.username.toLowerCase()&&u.password===form.password);
     setLoading(false);
-    if(!match){rlFail(form.username);const rl2=rlCheck(form.username);if(rl2.locked)return setErr("🔒 Too many failed attempts. Account locked for 15 minutes.");return setErr("Incorrect username or password.");}
+    if(!u) return setErr("Incorrect username or password.");
     if(!u.approved) return setErr("Your account is pending admin approval. Please wait.");
-    rlClear(form.username);sessionTouch();setUser(u);
+    setUser(u);
   }
 
   async function reg(){
     setErr("");
     if(!form.name||!form.username||!form.password) return setErr("Please fill in all required fields.");
-    if(form.password.length<8) return setErr("Password must be at least 8 characters.");
-    if(calcStrength(form.password)<2) return setErr("Password is too weak. Add uppercase letters, numbers, or symbols.");
+    if(form.password.length<6) return setErr("Password must be at least 6 characters.");
     if(form.password!==form.confirmPassword) return setErr("Passwords do not match.");
     setLoading(true);
     try{
+      // Try to get fresh users, but fall back to local if Firebase is slow
       let freshUsers=users;
-      try{const fromDB=await getOnlineUsers();if(fromDB&&fromDB.length>0)freshUsers=fromDB;}catch(e){}
-      if(freshUsers.find(u=>u.username.toLowerCase()===form.username.toLowerCase())){
-        setLoading(false);return setErr("That username is already taken.");
+      try{
+        const fromDB=await getOnlineUsers();
+        if(fromDB&&fromDB.length>0) freshUsers=fromDB;
+      }catch(e){
+        // Firebase fetch failed, use local users — still allow registration
+        console.warn("Could not fetch fresh users, using local",e);
       }
-      const hashed=await hashPassword(form.password);
-      const newUser={id:uid(),name:form.name.trim(),username:form.username.trim(),password:hashed,role:"worker",approved:false};
+      if(freshUsers.find(u=>u.username.toLowerCase()===form.username.toLowerCase())){
+        setLoading(false);
+        return setErr("That username is already taken.");
+      }
+      const newUser={id:uid(),name:form.name.trim(),username:form.username.trim(),password:form.password,role:"worker",approved:false};
       const updated=[...freshUsers,newUser];
-      try{await setOnlineUsers(updated);}catch(e){console.error("save failed",e);}
+      try{
+        await setOnlineUsers(updated);
+      }catch(e){
+        console.error("Firebase save failed, saved locally only",e);
+      }
       setUsers(updated);
       setOk("Account created! An admin must approve your access before you can sign in.");
-      setErr("");setTab("login");setForm({name:"",username:"",password:"",confirmPassword:""});
-    }catch(e){setErr("Something went wrong. Please try again.");}
+      setErr("");
+      setTab("login");
+      setForm({name:"",username:"",password:"",confirmPassword:""});
+    }catch(e){
+      console.error("reg error",e);
+      setErr("Something went wrong. Please try again.");
+    }
     setLoading(false);
   }
 
-  const cardStyle={width:420,background:"#fff",borderRadius:20,boxShadow:"0 20px 60px rgba(0,0,0,.12),0 4px 16px rgba(22,163,74,.08)",overflow:"hidden",border:"1px solid rgba(22,163,74,.15)"};
-  const headerStyle={background:"linear-gradient(135deg,#0f2318 0%,#1a3d26 60%,#0f4020 100%)",padding:"32px 36px 28px",position:"relative",overflow:"hidden"};
+  const cardStyle={
+    width:420,background:"#fff",borderRadius:20,
+    boxShadow:"0 20px 60px rgba(0,0,0,.12), 0 4px 16px rgba(22,163,74,.08)",
+    overflow:"hidden",border:"1px solid rgba(22,163,74,.15)"
+  };
+  const headerStyle={
+    background:"linear-gradient(135deg,#0f2318 0%,#1a3d26 60%,#0f4020 100%)",
+    padding:"32px 36px 28px",position:"relative",overflow:"hidden"
+  };
   const bodyStyle={padding:"28px 36px 32px"};
-  const inp2={background:"#f8fafc",border:"1.5px solid #e2e8f0",color:"#1e293b",borderRadius:10,padding:"11px 14px",width:"100%",fontSize:13.5,outline:"none",boxSizing:"border-box",fontFamily:"inherit",transition:"border-color .2s,box-shadow .2s"};
+  const inp2={
+    background:"#f8fafc",border:"1.5px solid #e2e8f0",color:"#1e293b",
+    borderRadius:10,padding:"11px 14px",width:"100%",fontSize:13.5,outline:"none",
+    boxSizing:"border-box",fontFamily:"inherit",transition:"border-color .2s, box-shadow .2s"
+  };
   const lbl2={fontSize:11,color:"#64748b",display:"block",marginBottom:5,letterSpacing:.5,fontWeight:600,textTransform:"uppercase"};
 
   return(
     <div style={{minHeight:"100vh",background:"linear-gradient(160deg,#f0fdf4 0%,#ecfdf5 40%,#e0f2fe 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Segoe UI',system-ui,sans-serif"}}>
+      {/* Decorative background blobs */}
       <div style={{position:"fixed",top:"-10%",right:"-5%",width:400,height:400,borderRadius:"50%",background:"radial-gradient(circle,rgba(22,163,74,.07) 0%,transparent 70%)",pointerEvents:"none"}}/>
       <div style={{position:"fixed",bottom:"-10%",left:"-5%",width:500,height:500,borderRadius:"50%",background:"radial-gradient(circle,rgba(16,185,129,.06) 0%,transparent 70%)",pointerEvents:"none"}}/>
+
       <div style={cardStyle} className="fade-in">
         {/* Header */}
         <div style={headerStyle}>
+          {/* Decorative circles */}
           <div style={{position:"absolute",top:-30,right:-30,width:130,height:130,borderRadius:"50%",background:"rgba(74,222,128,.06)",border:"1px solid rgba(74,222,128,.12)"}}/>
           <div style={{position:"absolute",bottom:-20,left:-20,width:90,height:90,borderRadius:"50%",background:"rgba(74,222,128,.04)"}}/>
           <div style={{position:"relative",display:"flex",alignItems:"center",gap:14}}>
@@ -5422,23 +5291,33 @@ function Login({users,setUsers,setUser}){
           <div style={{position:"relative",marginTop:18,fontSize:13,color:"rgba(255,255,255,.55)",lineHeight:1.5}}>
             {tab==="login"?"Welcome back! Sign in to manage your farm.":"Create your worker account to get started."}
           </div>
-          <div style={{position:"absolute",top:16,right:16,padding:"4px 10px",borderRadius:20,background:navigator.onLine?"rgba(74,222,128,.18)":"rgba(239,68,68,.18)",border:"1px solid "+(navigator.onLine?"rgba(74,222,128,.35)":"rgba(239,68,68,.4)"),fontSize:10,color:navigator.onLine?"#4ade80":"#f87171",fontWeight:700,display:"flex",alignItems:"center",gap:5}}>
+          {/* Online/Offline badge */}
+          <div style={{position:"absolute",top:16,right:16,padding:"4px 10px",borderRadius:20,
+            background:navigator.onLine?"rgba(74,222,128,.18)":"rgba(239,68,68,.18)",
+            border:"1px solid "+(navigator.onLine?"rgba(74,222,128,.35)":"rgba(239,68,68,.4)"),
+            fontSize:10,color:navigator.onLine?"#4ade80":"#f87171",fontWeight:700,display:"flex",alignItems:"center",gap:5}}>
             <span style={{width:6,height:6,borderRadius:"50%",background:navigator.onLine?"#4ade80":"#f87171",display:"inline-block",animation:"pulse 2s ease-in-out infinite"}}/>
             {navigator.onLine?"ONLINE":"OFFLINE"}
           </div>
-          {/* Security badge */}
-          <div style={{position:"absolute",bottom:14,right:16,fontSize:9,color:"rgba(74,222,128,.5)",display:"flex",alignItems:"center",gap:3}}>
-            🔐 SHA-256 Encrypted
-          </div>
         </div>
+
         {/* Body */}
         <div style={bodyStyle}>
+          {/* Tabs */}
           <div style={{display:"flex",background:"#f1f5f9",borderRadius:11,padding:3,marginBottom:24,gap:2}}>
             {[["login","🔐 Sign In"],["register","✏️ Register"]].map(([t,l])=>(
-              <button key={t} onClick={()=>{setTab(t);setErr("");setOk("");setLockMsg("");}} style={{flex:1,padding:"9px 6px",border:"none",borderRadius:9,background:tab===t?"#fff":"transparent",color:tab===t?"#1e293b":"#64748b",fontWeight:tab===t?700:500,fontSize:13,cursor:"pointer",fontFamily:"inherit",transition:"all .2s",boxShadow:tab===t?"0 1px 6px rgba(0,0,0,.08)":"none"}}>{l}</button>
+              <button key={t} onClick={()=>{setTab(t);setErr("");setOk("");}} style={{
+                flex:1,padding:"9px 6px",border:"none",borderRadius:9,
+                background:tab===t?"#fff":"transparent",
+                color:tab===t?"#1e293b":"#64748b",
+                fontWeight:tab===t?700:500,fontSize:13,cursor:"pointer",
+                fontFamily:"inherit",transition:"all .2s",
+                boxShadow:tab===t?"0 1px 6px rgba(0,0,0,.08)":"none"
+              }}>{l}</button>
             ))}
           </div>
 
+          {/* Fields */}
           <div style={{display:"flex",flexDirection:"column",gap:14}}>
             {tab==="register"&&(
               <div>
@@ -5456,61 +5335,48 @@ function Login({users,setUsers,setUser}){
             </div>
             <div>
               <label style={lbl2}>Password <span style={{color:"#ef4444"}}>*</span></label>
-              <div style={{position:"relative"}}>
-                <input type={showPw?"text":"password"} value={form.password}
-                  onChange={e=>{setForm({...form,password:e.target.value});if(tab==="register")setPwStrength(calcStrength(e.target.value));}}
-                  onKeyDown={e=>e.key==="Enter"&&(tab==="login"?login():reg())}
-                  placeholder="••••••••" style={{...inp2,paddingRight:40}}
-                  onFocus={e=>{e.target.style.borderColor="#16a34a";e.target.style.boxShadow="0 0 0 3px rgba(22,163,74,.1)";}}
-                  onBlur={e=>{e.target.style.borderColor="#e2e8f0";e.target.style.boxShadow="none";}}/>
-                <button type="button" onClick={()=>setShowPw(p=>!p)} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#94a3b8",padding:2}}>{showPw?"🙈":"👁️"}</button>
-              </div>
-              {/* Password strength meter — register only */}
-              {tab==="register"&&form.password.length>0&&(
-                <div style={{marginTop:6}}>
-                  <div style={{display:"flex",gap:3,marginBottom:3}}>
-                    {[1,2,3,4].map(i=>(
-                      <div key={i} style={{flex:1,height:3,borderRadius:2,background:pwStrength>=i?strengthColor[pwStrength]:"#e2e8f0",transition:"background .3s"}}/>
-                    ))}
-                  </div>
-                  {pwStrength>0&&<div style={{fontSize:10,color:strengthColor[pwStrength],fontWeight:600}}>{strengthLabel[pwStrength]} password {pwStrength<3?"— add uppercase, numbers & symbols for better security":""}</div>}
-                </div>
-              )}
+              <input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="••••••••"
+                onKeyDown={e=>e.key==="Enter"&&(tab==="login"?login():reg())} style={inp2}
+                onFocus={e=>{e.target.style.borderColor="#16a34a";e.target.style.boxShadow="0 0 0 3px rgba(22,163,74,.1)";}}
+                onBlur={e=>{e.target.style.borderColor="#e2e8f0";e.target.style.boxShadow="none";}}/>
             </div>
             {tab==="register"&&(
               <div>
                 <label style={lbl2}>Confirm Password <span style={{color:"#ef4444"}}>*</span></label>
-                <div style={{position:"relative"}}>
-                  <input type={showPw2?"text":"password"} value={form.confirmPassword}
-                    onChange={e=>setForm({...form,confirmPassword:e.target.value})}
-                    onKeyDown={e=>e.key==="Enter"&&reg()}
-                    placeholder="••••••••" style={{...inp2,paddingRight:40,borderColor:form.confirmPassword&&form.confirmPassword!==form.password?"#ef4444":"#e2e8f0"}}
-                    onFocus={e=>{e.target.style.borderColor=form.confirmPassword!==form.password?"#ef4444":"#16a34a";e.target.style.boxShadow="0 0 0 3px rgba(22,163,74,.1)";}}
-                    onBlur={e=>{e.target.style.borderColor="#e2e8f0";e.target.style.boxShadow="none";}}/>
-                  <button type="button" onClick={()=>setShowPw2(p=>!p)} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#94a3b8",padding:2}}>{showPw2?"🙈":"👁️"}</button>
-                </div>
-                {form.confirmPassword&&form.confirmPassword!==form.password&&<div style={{fontSize:10,color:"#ef4444",marginTop:3}}>⚠️ Passwords do not match</div>}
-                {form.confirmPassword&&form.confirmPassword===form.password&&<div style={{fontSize:10,color:"#16a34a",marginTop:3}}>✅ Passwords match</div>}
+                <input type="password" value={form.confirmPassword} onChange={e=>setForm({...form,confirmPassword:e.target.value})} placeholder="••••••••"
+                  onKeyDown={e=>e.key==="Enter"&&reg()} style={inp2}
+                  onFocus={e=>{e.target.style.borderColor="#16a34a";e.target.style.boxShadow="0 0 0 3px rgba(22,163,74,.1)";}}
+                  onBlur={e=>{e.target.style.borderColor="#e2e8f0";e.target.style.boxShadow="none";}}/>
               </div>
             )}
           </div>
 
           {/* Messages */}
-          {lockMsg&&<div style={{marginTop:14,padding:"10px 14px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:9,color:"#92400e",fontSize:13,display:"flex",alignItems:"center",gap:8}}><span>⏱️</span><span>{lockMsg}</span></div>}
-          {err&&<div style={{marginTop:14,padding:"10px 14px",background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:9,color:"#b91c1c",fontSize:13,display:"flex",alignItems:"center",gap:8}}><span>⚠️</span><span>{err}</span></div>}
-          {ok&&<div style={{marginTop:14,padding:"10px 14px",background:"#f0fdf4",border:"1px solid #86efac",borderRadius:9,color:"#15803d",fontSize:13,display:"flex",alignItems:"center",gap:8}}><span>✅</span><span>{ok}</span></div>}
+          {err&&<div style={{marginTop:14,padding:"10px 14px",background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:9,color:"#b91c1c",fontSize:13,display:"flex",alignItems:"center",gap:8}}>
+            <span>⚠️</span><span>{err}</span>
+          </div>}
+          {ok&&<div style={{marginTop:14,padding:"10px 14px",background:"#f0fdf4",border:"1px solid #86efac",borderRadius:9,color:"#15803d",fontSize:13,display:"flex",alignItems:"center",gap:8}}>
+            <span>✅</span><span>{ok}</span>
+          </div>}
 
-          <button onClick={tab==="login"?login:reg} disabled={loading} style={{marginTop:20,width:"100%",padding:"13px",borderRadius:11,border:"none",background:loading?"#86efac":"linear-gradient(135deg,#16a34a,#15803d)",color:"#fff",fontWeight:700,fontSize:14.5,cursor:loading?"not-allowed":"pointer",fontFamily:"inherit",boxShadow:loading?"none":"0 4px 18px rgba(22,163,74,.35)",transition:"all .2s",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
-            {loading?<><span className="spin" style={{width:14,height:14,border:"2px solid rgba(255,255,255,.4)",borderTop:"2px solid #fff",borderRadius:"50%",display:"inline-block"}}/>Processing…</>:tab==="login"?"Sign In →":"Create Account →"}
+          {/* Submit button */}
+          <button onClick={tab==="login"?login:reg} disabled={loading} style={{
+            marginTop:20,width:"100%",padding:"13px",borderRadius:11,border:"none",
+            background:loading?"#86efac":"linear-gradient(135deg,#16a34a,#15803d)",
+            color:"#fff",fontWeight:700,fontSize:14.5,cursor:loading?"not-allowed":"pointer",
+            fontFamily:"inherit",boxShadow:loading?"none":"0 4px 18px rgba(22,163,74,.35)",
+            transition:"all .2s",display:"flex",alignItems:"center",justifyContent:"center",gap:8
+          }}>
+            {loading?<><span className="spin" style={{width:14,height:14,border:"2px solid rgba(255,255,255,.4)",borderTop:"2px solid #fff",borderRadius:"50%",display:"inline-block"}}/>Processing…</>
+            :tab==="login"?"Sign In →":"Create Account →"}
           </button>
 
+          {/* Register info */}
           {tab==="register"&&<div style={{marginTop:14,padding:"10px 14px",background:"rgba(59,130,246,.06)",border:"1px solid rgba(59,130,246,.15)",borderRadius:9,fontSize:12,color:"#3b82f6",lineHeight:1.6}}>
-            ℹ️ New accounts require <strong>admin approval</strong>. Passwords are <strong>SHA-256 hashed</strong> — never stored in plain text.
+            ℹ️ New accounts require <strong>admin approval</strong> before you can log in. The farm admin will be notified.
           </div>}
 
-          {tab==="login"&&<div style={{marginTop:12,textAlign:"center",fontSize:11,color:"#94a3b8"}}>
-            🔐 Protected · 5 attempts max · Auto-locks 15 min · Session expires 8h
-          </div>}
+
         </div>
       </div>
     </div>
@@ -5838,19 +5704,6 @@ function AHome({pigs,feeds,sales,logs,users,expenses,incomes,reproductions,stock
       {[{l:"Market Ready (80kg+)",v:active.filter(p=>p.weight>=80).length,c:C.amber},{l:"Pregnant Sows",v:pregnant.length,c:C.pink},{l:"Workers",v:users.filter(u=>u.role==="worker"&&u.approved).length,c:C.blue},{l:"Logs Today",v:logs.filter(l=>l.date===toDay()).length,c:C.muted}].map(s=>(
         <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
       ))}
-    </div>
-
-    {/* Quick Actions */}
-    <div style={{...S.card,marginBottom:14,background:"linear-gradient(135deg,#f0fdf4,#f8fafc)",border:"1px solid rgba(22,163,74,.2)"}}>
-      <div style={{fontSize:12,fontWeight:700,color:C.muted,marginBottom:10,letterSpacing:.5,textTransform:"uppercase"}}>⚡ Quick Actions</div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
-        {[["➕","Add Pig","pigs"],["🌾","Log Feed","adminfeed"],["📝","Daily Log","adminlog"],["📤","Message","messages"]].map(([icon,label,pg])=>(
-          <button key={pg} onClick={()=>setPage(pg)} style={{padding:"10px 6px",borderRadius:10,border:"1px solid rgba(22,163,74,.2)",background:"#fff",cursor:"pointer",fontFamily:"inherit",textAlign:"center",transition:"all .15s",boxShadow:"0 1px 4px rgba(0,0,0,.05)"}}>
-            <div style={{fontSize:20,marginBottom:3}}>{icon}</div>
-            <div style={{fontSize:10,fontWeight:700,color:C.muted}}>{label}</div>
-          </button>
-        ))}
-      </div>
     </div>
 
     <div style={S.g2}>
@@ -6680,78 +6533,46 @@ function ChangePassword({user,users,setUsers}){
   const [err,setErr]=useState("");
   const [ok,setOk]=useState("");
   const [saving,setSaving]=useState(false);
-  const [showCur,setShowCur]=useState(false);
-  const [showNew,setShowNew]=useState(false);
-  const [pwStr,setPwStr]=useState(0);
-  const strLabel=["","Weak","Fair","Good","Strong"];
-  const strColor=["","#ef4444","#f59e0b","#3b82f6","#16a34a"];
-  function calcStr(pw){let s=0;if(pw.length>=8)s++;if(/[A-Z]/.test(pw))s++;if(/[0-9]/.test(pw))s++;if(/[^A-Za-z0-9]/.test(pw))s++;return s;}
 
   async function save(){
     setErr("");setOk("");
     if(!form.current||!form.newPass||!form.confirm) return setErr("Please fill in all fields.");
-    if(form.newPass.length<8) return setErr("New password must be at least 8 characters.");
-    if(calcStr(form.newPass)<2) return setErr("Password too weak — add uppercase, numbers or symbols.");
+    if(form.newPass.length<6) return setErr("New password must be at least 6 characters.");
     if(form.newPass!==form.confirm) return setErr("New passwords do not match.");
     const me=users.find(u=>u.id===user.id);
-    if(!me) return setErr("Account not found.");
-    const match=await verifyPassword(form.current,me.password);
-    if(!match) return setErr("Current password is incorrect.");
+    if(!me||me.password!==form.current) return setErr("Current password is incorrect.");
     setSaving(true);
-    const hashed=await hashPassword(form.newPass);
-    const updated=users.map(u=>u.id===user.id?{...u,password:hashed}:u);
+    const updated=users.map(u=>u.id===user.id?{...u,password:form.newPass}:u);
     setUsers(updated);
     try{
       await setOnlineUsers(updated);
-      setOk("✅ Password changed & encrypted successfully!");
-      setForm({current:"",newPass:"",confirm:""});setPwStr(0);
+      setOk("✅ Password changed successfully!");
+      setForm({current:"",newPass:"",confirm:""});
     }catch(e){setErr("Failed to save. Check internet and try again.");}
     setSaving(false);
   }
 
-  const pwRelStyle={position:"relative"};
-  const eyeBtn={position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#94a3b8",padding:2};
-
-  return(<div style={{maxWidth:440}}>
+  return(<div style={{maxWidth:420}}>
     <div style={S.h1}>🔒 Change Password</div>
-    <div style={S.sub}>Passwords are SHA-256 hashed before saving</div>
+    <div style={S.sub}>Update your login password</div>
     <div style={S.card}>
-      {err&&<div style={{padding:"9px 13px",background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.25)",borderRadius:8,color:C.red,fontSize:13,marginBottom:12}}>⚠️ {err}</div>}
+      {err&&<div style={{padding:"9px 13px",background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.25)",borderRadius:8,color:C.red,fontSize:13,marginBottom:12}}>{err}</div>}
       {ok&&<div style={{padding:"9px 13px",background:"rgba(22,163,74,.08)",border:"1px solid rgba(22,163,74,.25)",borderRadius:8,color:C.accent,fontSize:13,marginBottom:12}}>{ok}</div>}
       <div style={{marginBottom:12}}>
         <label style={S.lbl}>Current Password</label>
-        <div style={pwRelStyle}>
-          <input type={showCur?"text":"password"} placeholder="Enter current password" value={form.current} onChange={e=>setForm({...form,current:e.target.value})} style={{...S.inp,paddingRight:38}}/>
-          <button type="button" onClick={()=>setShowCur(p=>!p)} style={eyeBtn}>{showCur?"🙈":"👁️"}</button>
-        </div>
+        <input type="password" placeholder="Enter current password" value={form.current} onChange={e=>setForm({...form,current:e.target.value})} style={S.inp}/>
       </div>
-      <div style={{marginBottom:6}}>
-        <label style={S.lbl}>New Password <span style={{color:C.red}}>*</span></label>
-        <div style={pwRelStyle}>
-          <input type={showNew?"text":"password"} placeholder="Min 8 chars with numbers & symbols" value={form.newPass}
-            onChange={e=>{setForm({...form,newPass:e.target.value});setPwStr(calcStr(e.target.value));}}
-            style={{...S.inp,paddingRight:38}}/>
-          <button type="button" onClick={()=>setShowNew(p=>!p)} style={eyeBtn}>{showNew?"🙈":"👁️"}</button>
-        </div>
-        {form.newPass.length>0&&<div style={{marginTop:5}}>
-          <div style={{display:"flex",gap:3,marginBottom:3}}>
-            {[1,2,3,4].map(i=><div key={i} style={{flex:1,height:3,borderRadius:2,background:pwStr>=i?strColor[pwStr]:"#e2e8f0",transition:"background .3s"}}/>)}
-          </div>
-          <div style={{fontSize:10,color:strColor[pwStr],fontWeight:600}}>{strLabel[pwStr]}{pwStr<3?" — add more complexity":""}</div>
-        </div>}
+      <div style={{marginBottom:12}}>
+        <label style={S.lbl}>New Password</label>
+        <input type="password" placeholder="Min 6 characters" value={form.newPass} onChange={e=>setForm({...form,newPass:e.target.value})} style={S.inp}/>
       </div>
       <div style={{marginBottom:16}}>
         <label style={S.lbl}>Confirm New Password</label>
-        <input type="password" placeholder="Repeat new password" value={form.confirm}
-          onChange={e=>setForm({...form,confirm:e.target.value})}
-          style={{...S.inp,borderColor:form.confirm&&form.confirm!==form.newPass?"#ef4444":undefined}}/>
-        {form.confirm&&form.confirm!==form.newPass&&<div style={{fontSize:10,color:C.red,marginTop:3}}>⚠️ Passwords do not match</div>}
-        {form.confirm&&form.confirm===form.newPass&&<div style={{fontSize:10,color:C.accent,marginTop:3}}>✅ Passwords match</div>}
+        <input type="password" placeholder="Repeat new password" value={form.confirm} onChange={e=>setForm({...form,confirm:e.target.value})} style={S.inp}/>
       </div>
       <button onClick={save} disabled={saving} style={{...S.btn(),width:"100%",padding:12,fontSize:14}}>
-        {saving?"⏳ Hashing & saving...":"🔒 Change Password"}
+        {saving?"⏳ Saving...":"🔒 Change Password"}
       </button>
-      <div style={{marginTop:10,fontSize:11,color:C.faint,textAlign:"center"}}>🔐 Your new password is SHA-256 encrypted before storage</div>
     </div>
   </div>);
 }
@@ -6840,43 +6661,19 @@ function Workers({users,setUsers,tasks=[]}){
 }
 
 /* ─── Worker Views ─── */
-function WHome({user,logs,feeds,sales,messages,tasks=[]}){
+function WHome({user,logs,feeds,sales,messages}){
   const ml=logs.filter(l=>l.workerId===user.id);
   const mf=feeds.filter(f=>f.workerId===user.id);
   const ms=sales.filter(s=>s.workerId===user.id);
   const latest=messages[messages.length-1];
-  const pendingTasks=tasks.filter(t=>t.workerId===user.id&&t.status==="pending");
-  const today=toDay();
-  const todayFed=mf.some(f=>f.date===today);
   return(<div>
-    <div style={S.h1}>Welcome, {user.name}! 👋</div>
+    <div style={S.h1}>Welcome, {user.name}!</div>
     {latest&&<div style={{padding:"11px 14px",background:"rgba(22,163,74,.06)",border:"1px solid rgba(22,163,74,.25)",borderRadius:9,marginBottom:14,fontSize:13}}>
       <div style={{fontWeight:600,color:C.accent,marginBottom:3}}>📢 From {latest.from}:</div>
       <div style={{color:C.text}}>{latest.text}</div>
       <div style={{fontSize:10,color:C.faint,marginTop:3}}>{latest.date}</div>
     </div>}
-    {/* Task badge */}
-    {pendingTasks.length>0&&<div style={{padding:"11px 14px",background:"linear-gradient(135deg,rgba(22,163,74,.1),rgba(16,185,129,.06))",border:"1px solid rgba(22,163,74,.3)",borderRadius:9,marginBottom:10,display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
-      <div style={{display:"flex",alignItems:"center",gap:8}}>
-        <span style={{fontSize:18}}>✅</span>
-        <div>
-          <div style={{fontWeight:700,color:C.accent,fontSize:13}}>{pendingTasks.length} pending task{pendingTasks.length>1?"s":""} today</div>
-          <div style={{fontSize:11,color:C.muted}}>{pendingTasks.filter(t=>t.autoFeed).length} feeding reminder{pendingTasks.filter(t=>t.autoFeed).length!==1?"s":""} · {pendingTasks.filter(t=>!t.autoFeed).length} manual</div>
-        </div>
-      </div>
-      <span style={{fontSize:11,color:C.accent,fontWeight:700}}>{todayFed?"🌾 Fed today":"⏳ Not fed yet"}</span>
-    </div>}
-    {!ml.some(l=>l.date===today)&&<div style={{padding:"11px 14px",background:"rgba(245,158,11,.08)",border:"1px solid rgba(245,158,11,.3)",borderRadius:9,marginBottom:10,color:C.amber,fontSize:13}}>⚠️ Please submit your daily report today!</div>}
-    {/* Quick actions for worker */}
-    <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginBottom:14}}>
-      {[["🌾","Log Feeding","feedentry"],["📝","Daily Report","dailyentry"]].map(([icon,label,pg])=>(
-        <div key={pg} style={{padding:"12px 10px",borderRadius:10,border:"1px solid rgba(22,163,74,.2)",background:"#fff",cursor:"pointer",textAlign:"center",boxShadow:"0 1px 4px rgba(0,0,0,.05)"}}
-          onClick={()=>{/* setPage needs to be passed — handled by nav */}}>
-          <div style={{fontSize:22,marginBottom:3}}>{icon}</div>
-          <div style={{fontSize:11,fontWeight:700,color:C.muted}}>{label}</div>
-        </div>
-      ))}
-    </div>
+    {!ml.some(l=>l.date===toDay())&&<div style={{padding:"11px 14px",background:"rgba(245,158,11,.08)",border:"1px solid rgba(245,158,11,.3)",borderRadius:9,marginBottom:14,color:C.amber,fontSize:13}}>⚠️ Please submit your daily report today!</div>}
     <div style={S.g4}>
       {[{l:"Daily Reports",v:ml.length,c:C.accent},{l:"Feeding Logs",v:mf.length,c:C.amber},{l:"Sales",v:ms.length,c:"#10b981"},{l:"My Revenue",v:fmtRWF(ms.reduce((s,l)=>s+(l.total||0),0)),c:C.purple}].map(s=>(
         <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
