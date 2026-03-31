@@ -3481,7 +3481,6 @@ function App(){
   const [capitalLoaded,setCapitalLoaded]=useState(false);
   const [user,setUser]=useState(null);
   const [sessionLoaded,setSessionLoaded]=useState(false);
-  const [pendingApproval,setPendingApproval]=useState(false);
   const [globalRefreshing,setGlobalRefreshing]=useState(false);
   const [lastRefresh,setLastRefresh]=useState("");
   const [undoStack,setUndoStack]=useState([]); // [{type,data,label,timestamp}]
@@ -3598,16 +3597,14 @@ function App(){
       }catch(e){}
     },8000);
 
-    // Listen for Firebase auth state — fires on page load AND after Google sign-in
+    // Listen for Firebase auth state — fires on page load AND after Google redirect
     const unsubAuth = _auth.onAuthStateChanged(async fbUser=>{
       if(fbUser){
         const profile = await ensureUserProfile(fbUser);
         if(profile&&profile.approved){
           setUser({...profile, uid:fbUser.uid, email:fbUser.email});
         } else if(profile&&!profile.approved){
-          // Sign out but store pending flag so login screen can show message
           await _auth.signOut();
-          setPendingApproval(true);
         }
       }
       setSessionLoaded(true);
@@ -3714,7 +3711,7 @@ function App(){
     <div style={{width:120,height:3,background:"rgba(255,255,255,.1)",borderRadius:3,overflow:"hidden"}}><div style={{width:"60%",height:"100%",background:"#4ade80",borderRadius:3,animation:"spin 1s linear infinite"}}/></div>
   </div>);
 
-  if(!user)return <Login setUser={setUser} pendingApproval={pendingApproval} setPendingApproval={setPendingApproval}/>;
+  if(!user)return <Login setUser={setUser}/>;
   const isAdmin=user.role==="admin"||user.email==="ndayishimiyealexis50@gmail.com";
   const pending=users.filter(u=>u.role==="worker"&&!u.approved);
   const lowStockCount=(stock||[]).filter(s=>s.quantity<=s.minLevel).length;
@@ -3928,8 +3925,11 @@ function App(){
       {!isAdmin&&page==="pigentry"&&<WorkerPigEntry user={user} pigs={pigs} setPigs={setPigs} pendingPigs={pendingPigs} setPendingPigs={setPendingPigs}/>}
       {!isAdmin&&page==="remotework"&&<RemoteWorkPanel user={user} sessions={sessions} setSessions={setSessions} messages={messages}/>}
       {isAdmin&&page==="performance"&&<WorkerPerformance users={users} logs={logs} feeds={feeds} sales={sales}/>}
+      {!isAdmin&&page==="performance"&&<WorkerPerformance users={users.filter(u=>u.uid===user.uid)} logs={logs.filter(l=>l.worker===user.name)} feeds={feeds.filter(f=>f.worker===user.name)} sales={sales.filter(s=>s.worker===user.name)}/>}
       {isAdmin&&page==="weekly"&&<WeeklyReport pigs={pigs} feeds={feeds} sales={sales} logs={logs} expenses={expenses} incomes={incomes} users={users} stock={stock}/>}
-      {page==="tasks"&&<TaskManager user={user} users={users} tasks={tasks} setTasks={setTasks} feeds={feeds}/>}
+      {!isAdmin&&page==="weekly"&&<WeeklyReport pigs={pigs} feeds={feeds.filter(f=>f.worker===user.name)} sales={sales.filter(s=>s.worker===user.name)} logs={logs.filter(l=>l.worker===user.name)} expenses={expenses} incomes={incomes} users={users.filter(u=>u.uid===user.uid)} stock={stock}/>}
+      {isAdmin&&page==="tasks"&&<TaskManager user={user} users={users} tasks={tasks} setTasks={setTasks} feeds={feeds}/>}
+      {!isAdmin&&page==="tasks"&&<TaskManager user={user} users={users} tasks={tasks.filter(t=>t.workerId===user.uid||t.workerId===user.id)} setTasks={setTasks} feeds={feeds}/>}
       {page==="vaccination"&&<VaccinationTracker pigs={pigs} users={users} vaccinations={vaccinations} setVaccinations={setVaccinations} user={user} capital={capital} setCapital={setCapital}/>}
       {page==="changepassword"&&<ChangePassword user={user}/>}
       {isAdmin&&page==="whatsapp"&&<WhatsAppSettings pigs={pigs} feeds={feeds} logs={logs} sales={sales} expenses={expenses} incomes={incomes} reproductions={reproductions} stock={stock}/>}
@@ -5168,10 +5168,10 @@ function CapitalManager({capital,setCapital,feeds,sales,expenses,incomes,pigs,us
 }
 
 /* ─── Login ─── */
-function Login({setUser, pendingApproval, setPendingApproval}){
+function Login({setUser}){
   const [tab,setTab]=useState("login");
   const [form,setForm]=useState({name:"",email:"",password:"",confirmPassword:""});
-  const [err,setErr]=useState(pendingApproval?"Your account is pending admin approval. Please wait for the admin to approve you before logging in.":"");
+  const [err,setErr]=useState("");
   const [ok,setOk]=useState("");
   const [loading,setLoading]=useState(false);
   const [gLoading,setGLoading]=useState(false);
@@ -5238,9 +5238,14 @@ function Login({setUser, pendingApproval, setPendingApproval}){
     setLoading(false);
   }
 
+  const isMobile=/Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
   async function googleSignIn(){
     setErr("");setGLoading(true);
     try{
+      if(isMobile){
+        await _auth.signInWithRedirect(_googleProvider);
+        return;
+      }
       const result = await _auth.signInWithPopup(_googleProvider);
       await handleFirebaseUser(result.user);
     }catch(e){
