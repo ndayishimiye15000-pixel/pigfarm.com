@@ -37,8 +37,19 @@ const _db   = firebase.firestore();
 const _auth = firebase.auth();
 const _googleProvider = new firebase.auth.GoogleAuthProvider();
 
-/* ─── Auth helpers ─── */
 const ADMIN_EMAIL = "ndayishimiyealexis50@gmail.com";
+
+// Handle Google redirect result on page load (mobile sign-in flow)
+window.__googleRedirectError = null;
+_auth.getRedirectResult().then(result => {
+  if(result && result.user) {
+    // Redirect succeeded — onAuthStateChanged will handle the user
+    window.__googleRedirectError = null;
+  }
+}).catch(err => {
+  // Store error so Login component can show it
+  window.__googleRedirectError = err.message || "Google sign-in failed. Try again.";
+});
 
 // Get or create user profile in Firestore under users/{uid}
 async function ensureUserProfile(firebaseUser, extraFields={}){
@@ -3598,7 +3609,7 @@ function App(){
       }catch(e){}
     },8000);
 
-    // Listen for Firebase auth state — fires on page load AND after Google sign-in
+    // Listen for Firebase auth state — fires on page load AND after Google redirect
     const unsubAuth = _auth.onAuthStateChanged(async fbUser=>{
       if(fbUser){
         const profile = await ensureUserProfile(fbUser);
@@ -3607,6 +3618,9 @@ function App(){
         } else if(profile&&!profile.approved){
           await _auth.signOut();
           setPendingApproval(true);
+        } else {
+          // profile is null — Firestore unavailable, sign out cleanly
+          await _auth.signOut();
         }
       }
       setSessionLoaded(true);
@@ -5173,7 +5187,7 @@ function CapitalManager({capital,setCapital,feeds,sales,expenses,incomes,pigs,us
 function Login({setUser, pendingApproval, setPendingApproval}){
   const [tab,setTab]=useState("login");
   const [form,setForm]=useState({name:"",email:"",password:"",confirmPassword:""});
-  const [err,setErr]=useState(pendingApproval?"Your account is pending admin approval. Please wait for the admin to approve you.":"");
+  const [err,setErr]=useState(pendingApproval?"Your account is pending admin approval. Please wait.":"");
   const [ok,setOk]=useState("");
   const [loading,setLoading]=useState(false);
   const [gLoading,setGLoading]=useState(false);
@@ -5186,6 +5200,11 @@ function Login({setUser, pendingApproval, setPendingApproval}){
 
   async function handleFirebaseUser(fbUser, extraName){
     const profile = await ensureUserProfile(fbUser, extraName?{name:extraName}:{});
+    if(!profile){
+      await _auth.signOut();
+      setErr("Could not load your account. Check your internet and try again.");
+      return;
+    }
     if(!profile.approved){
       await _auth.signOut();
       setErr("Your account is pending admin approval. Please wait.");
@@ -5193,6 +5212,14 @@ function Login({setUser, pendingApproval, setPendingApproval}){
     }
     setUser({...profile, uid:fbUser.uid, email:fbUser.email});
   }
+
+  // Show any error from the Google redirect (mobile flow)
+  React.useEffect(()=>{
+    if(window.__googleRedirectError){
+      setErr(window.__googleRedirectError);
+      window.__googleRedirectError = null;
+    }
+  },[]);
 
 
   async function login(){
@@ -5240,13 +5267,26 @@ function Login({setUser, pendingApproval, setPendingApproval}){
     setLoading(false);
   }
 
+  const isMobile=/Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
   async function googleSignIn(){
     setErr("");setGLoading(true);
     try{
+      if(isMobile){
+        await _auth.signInWithRedirect(_googleProvider);
+        // Page will reload — result handled by getRedirectResult + onAuthStateChanged
+        return;
+      }
       const result = await _auth.signInWithPopup(_googleProvider);
       await handleFirebaseUser(result.user);
     }catch(e){
-      if(e.code!=="auth/popup-closed-by-user") setErr("Google sign-in failed: "+e.message);
+      const msg = e.code==="auth/unauthorized-domain"
+        ? "This domain is not authorized in Firebase. Add it to Firebase → Authentication → Authorized Domains."
+        : e.code==="auth/popup-blocked"
+        ? "Popup was blocked. Please allow popups for this site and try again."
+        : e.code==="auth/popup-closed-by-user"
+        ? "" // user cancelled, no message
+        : "Google sign-in failed: "+e.message;
+      if(msg) setErr(msg);
     }
     setGLoading(false);
   }
