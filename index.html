@@ -3481,6 +3481,7 @@ function App(){
   const [capitalLoaded,setCapitalLoaded]=useState(false);
   const [user,setUser]=useState(null);
   const [sessionLoaded,setSessionLoaded]=useState(false);
+  const [pendingApproval,setPendingApproval]=useState(false);
   const [globalRefreshing,setGlobalRefreshing]=useState(false);
   const [lastRefresh,setLastRefresh]=useState("");
   const [undoStack,setUndoStack]=useState([]); // [{type,data,label,timestamp}]
@@ -3597,7 +3598,7 @@ function App(){
       }catch(e){}
     },8000);
 
-    // Listen for Firebase auth state — fires on page load AND after Google redirect
+    // Listen for Firebase auth state — fires on page load AND after Google sign-in
     const unsubAuth = _auth.onAuthStateChanged(async fbUser=>{
       if(fbUser){
         const profile = await ensureUserProfile(fbUser);
@@ -3605,6 +3606,7 @@ function App(){
           setUser({...profile, uid:fbUser.uid, email:fbUser.email});
         } else if(profile&&!profile.approved){
           await _auth.signOut();
+          setPendingApproval(true);
         }
       }
       setSessionLoaded(true);
@@ -3711,7 +3713,7 @@ function App(){
     <div style={{width:120,height:3,background:"rgba(255,255,255,.1)",borderRadius:3,overflow:"hidden"}}><div style={{width:"60%",height:"100%",background:"#4ade80",borderRadius:3,animation:"spin 1s linear infinite"}}/></div>
   </div>);
 
-  if(!user)return <Login setUser={setUser}/>;
+  if(!user)return <Login setUser={setUser} pendingApproval={pendingApproval} setPendingApproval={setPendingApproval}/>;
   const isAdmin=user.role==="admin"||user.email==="ndayishimiyealexis50@gmail.com";
   const pending=users.filter(u=>u.role==="worker"&&!u.approved);
   const lowStockCount=(stock||[]).filter(s=>s.quantity<=s.minLevel).length;
@@ -5168,10 +5170,10 @@ function CapitalManager({capital,setCapital,feeds,sales,expenses,incomes,pigs,us
 }
 
 /* ─── Login ─── */
-function Login({setUser}){
+function Login({setUser, pendingApproval, setPendingApproval}){
   const [tab,setTab]=useState("login");
   const [form,setForm]=useState({name:"",email:"",password:"",confirmPassword:""});
-  const [err,setErr]=useState("");
+  const [err,setErr]=useState(pendingApproval?"Your account is pending admin approval. Please wait for the admin to approve you.":"");
   const [ok,setOk]=useState("");
   const [loading,setLoading]=useState(false);
   const [gLoading,setGLoading]=useState(false);
@@ -5238,14 +5240,9 @@ function Login({setUser}){
     setLoading(false);
   }
 
-  const isMobile=/Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
   async function googleSignIn(){
     setErr("");setGLoading(true);
     try{
-      if(isMobile){
-        await _auth.signInWithRedirect(_googleProvider);
-        return;
-      }
       const result = await _auth.signInWithPopup(_googleProvider);
       await handleFirebaseUser(result.user);
     }catch(e){
