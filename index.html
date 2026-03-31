@@ -44,8 +44,8 @@ const ADMIN_EMAIL = "ndayishimiyealexis50@gmail.com";
 async function ensureUserProfile(firebaseUser, extraFields={}){
   const ref = _db.collection("users").doc(firebaseUser.uid);
   const snap = await ref.get();
+  const isAdmin = firebaseUser.email === ADMIN_EMAIL;
   if(!snap.exists){
-    const isAdmin = firebaseUser.email === ADMIN_EMAIL;
     const profile = {
       uid: firebaseUser.uid,
       email: firebaseUser.email,
@@ -58,7 +58,14 @@ async function ensureUserProfile(firebaseUser, extraFields={}){
     await ref.set(profile);
     return profile;
   }
-  return snap.data();
+  const existing = snap.data();
+  // Always fix admin profile if it exists with wrong role/approved
+  if(isAdmin && (!existing.approved || existing.role !== "admin")){
+    const fixed = {...existing, role:"admin", approved:true};
+    await ref.update({role:"admin", approved:true});
+    return fixed;
+  }
+  return existing;
 }
 
 async function getUserProfile(uid){
