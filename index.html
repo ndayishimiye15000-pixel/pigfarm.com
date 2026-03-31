@@ -3571,6 +3571,16 @@ function App(){
       setCapitalLoaded(true);setSessionsLoaded(true);
     });
 
+    // Handle Google redirect result (mobile sign-in)
+    _auth.getRedirectResult().then(async result=>{
+      if(result&&result.user){
+        const profile = await ensureUserProfile(result.user);
+        if(profile&&profile.approved){
+          setUser({...profile, uid:result.user.uid, email:result.user.email});
+        }
+      }
+    }).catch(e=>{ console.warn('getRedirectResult error',e); });
+
     setSessionLoaded(true);
 
     // Poll every 8s for new worker registrations
@@ -5171,18 +5181,6 @@ function Login({setUser}){
     setUser({...profile, uid:fbUser.uid, email:fbUser.email});
   }
 
-  /* ── Handle redirect result from mobile Google sign-in ── */
-  useEffect(()=>{
-    setGLoading(true);
-    _auth.getRedirectResult().then(async result=>{
-      if(result&&result.user){
-        await handleFirebaseUser(result.user);
-      }
-    }).catch(e=>{
-      if(e.code!=="auth/no-such-provider"&&e.code!=="auth/null-user")
-        setErr("Google sign-in failed: "+e.message);
-    }).finally(()=>setGLoading(false));
-  },[]);
 
   async function login(){
     setErr("");
