@@ -5171,6 +5171,19 @@ function Login({setUser}){
     setUser({...profile, uid:fbUser.uid, email:fbUser.email});
   }
 
+  /* ── Handle redirect result from mobile Google sign-in ── */
+  useEffect(()=>{
+    setGLoading(true);
+    _auth.getRedirectResult().then(async result=>{
+      if(result&&result.user){
+        await handleFirebaseUser(result.user);
+      }
+    }).catch(e=>{
+      if(e.code!=="auth/no-such-provider"&&e.code!=="auth/null-user")
+        setErr("Google sign-in failed: "+e.message);
+    }).finally(()=>setGLoading(false));
+  },[]);
+
   async function login(){
     setErr("");
     if(!form.email||!form.password) return setErr("Please enter email and password.");
@@ -5216,9 +5229,14 @@ function Login({setUser}){
     setLoading(false);
   }
 
+  const isMobile=/Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
   async function googleSignIn(){
     setErr("");setGLoading(true);
     try{
+      if(isMobile){
+        await _auth.signInWithRedirect(_googleProvider);
+        return;
+      }
       const result = await _auth.signInWithPopup(_googleProvider);
       await handleFirebaseUser(result.user);
     }catch(e){
