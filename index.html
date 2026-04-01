@@ -37,25 +37,14 @@ const _db   = firebase.firestore();
 const _auth = firebase.auth();
 const _googleProvider = new firebase.auth.GoogleAuthProvider();
 
+/* ─── Auth helpers ─── */
 const ADMIN_EMAIL = "ndayishimiyealexis50@gmail.com";
-
-// Handle Google redirect result on page load (mobile sign-in flow)
-window.__googleRedirectError = null;
-_auth.getRedirectResult().then(result => {
-  if(result && result.user) {
-    // Redirect succeeded — onAuthStateChanged will handle the user
-    window.__googleRedirectError = null;
-  }
-}).catch(err => {
-  // Store error so Login component can show it
-  window.__googleRedirectError = err.message || "Google sign-in failed. Try again.";
-});
 
 // Get or create user profile in Firestore under users/{uid}
 async function ensureUserProfile(firebaseUser, extraFields={}){
   const ref = _db.collection("users").doc(firebaseUser.uid);
   const snap = await ref.get();
-  const isAdmin = firebaseUser.email === ADMIN_EMAIL;
+  const isAdmin = firebaseUser.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
   if(!snap.exists){
     const profile = {
       uid: firebaseUser.uid,
@@ -3609,7 +3598,7 @@ function App(){
       }catch(e){}
     },8000);
 
-    // Listen for Firebase auth state — fires on page load AND after Google redirect
+    // Listen for Firebase auth state — fires on page load AND after Google sign-in
     const unsubAuth = _auth.onAuthStateChanged(async fbUser=>{
       if(fbUser){
         const profile = await ensureUserProfile(fbUser);
@@ -3619,7 +3608,6 @@ function App(){
           await _auth.signOut();
           setPendingApproval(true);
         } else {
-          // profile is null — Firestore unavailable, sign out cleanly
           await _auth.signOut();
         }
       }
@@ -3728,7 +3716,7 @@ function App(){
   </div>);
 
   if(!user)return <Login setUser={setUser} pendingApproval={pendingApproval} setPendingApproval={setPendingApproval}/>;
-  const isAdmin=user.role==="admin"||user.email==="ndayishimiyealexis50@gmail.com";
+  const isAdmin=user.role==="admin"||user.email?.toLowerCase()==="ndayishimiyealexis50@gmail.com";
   const pending=users.filter(u=>u.role==="worker"&&!u.approved);
   const lowStockCount=(stock||[]).filter(s=>s.quantity<=s.minLevel).length;
   const upcomingFarrows=reproductions.filter(r=>r.status==="pregnant"&&daysDiff(r.expectedFarrow)>=0&&daysDiff(r.expectedFarrow)<=7).length;
@@ -4680,7 +4668,7 @@ function WorkerTaskChart({users,tasks}){
 }
 
 function TaskManager({user,users,tasks,setTasks,feeds}){
-  const isAdmin=user.role==="admin"||user.email==="ndayishimiyealexis50@gmail.com";
+  const isAdmin=user.role==="admin"||user.email?.toLowerCase()==="ndayishimiyealexis50@gmail.com";
   const workers=users.filter(u=>u.role==="worker"&&u.approved);
   const [form,setForm]=useState({title:"",desc:"",workerId:"",priority:"Normal",due:toDay()});
   const [saved,setSaved]=useState(false);
@@ -4808,7 +4796,7 @@ function TaskManager({user,users,tasks,setTasks,feeds}){
    4. VACCINATION TRACKER
 ═══════════════════════════════════════════════════ */
 function VaccinationTracker({pigs,users,vaccinations,setVaccinations,user,capital,setCapital}){
-  const isAdmin=user.role==="admin"||user.email==="ndayishimiyealexis50@gmail.com";
+  const isAdmin=user.role==="admin"||user.email?.toLowerCase()==="ndayishimiyealexis50@gmail.com";
   const active=pigs.filter(p=>p.status==="active");
   const [form,setForm]=useState({pigId:"",vaccine:"CSF Vaccine",date:toDay(),nextDue:"",notes:"",givenBy:user.name,cost:""});
   const [saved,setSaved]=useState(false);
@@ -4902,7 +4890,7 @@ function VaccinationTracker({pigs,users,vaccinations,setVaccinations,user,capita
 
 /* ─── Capital Manager (Admin Only) ─── */
 function CapitalManager({capital,setCapital,feeds,sales,expenses,incomes,pigs,user}){
-  const isAdmin=user&&(user.role==="admin"||user.email==="ndayishimiyealexis50@gmail.com");
+  const isAdmin=user&&(user.role==="admin"||user.email?.toLowerCase()==="ndayishimiyealexis50@gmail.com");
   const [tab,setTab]=useState("overview");
   const [form,setForm]=useState({type:"income",category:"Other Income",amount:"",description:"",date:toDay()});
   const [saved,setSaved]=useState(false);
@@ -5213,14 +5201,6 @@ function Login({setUser, pendingApproval, setPendingApproval}){
     setUser({...profile, uid:fbUser.uid, email:fbUser.email});
   }
 
-  // Show any error from the Google redirect (mobile flow)
-  React.useEffect(()=>{
-    if(window.__googleRedirectError){
-      setErr(window.__googleRedirectError);
-      window.__googleRedirectError = null;
-    }
-  },[]);
-
 
   async function login(){
     setErr("");
@@ -5267,25 +5247,18 @@ function Login({setUser, pendingApproval, setPendingApproval}){
     setLoading(false);
   }
 
-  const isMobile=/Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
   async function googleSignIn(){
     setErr("");setGLoading(true);
     try{
-      if(isMobile){
-        await _auth.signInWithRedirect(_googleProvider);
-        // Page will reload — result handled by getRedirectResult + onAuthStateChanged
-        return;
-      }
       const result = await _auth.signInWithPopup(_googleProvider);
       await handleFirebaseUser(result.user);
     }catch(e){
-      const msg = e.code==="auth/unauthorized-domain"
-        ? "This domain is not authorized in Firebase. Add it to Firebase → Authentication → Authorized Domains."
-        : e.code==="auth/popup-blocked"
-        ? "Popup was blocked. Please allow popups for this site and try again."
-        : e.code==="auth/popup-closed-by-user"
-        ? "" // user cancelled, no message
-        : "Google sign-in failed: "+e.message;
+      const msg=
+        e.code==="auth/unauthorized-domain"?"This domain is not authorized. Add it in Firebase → Authentication → Authorized Domains.":
+        e.code==="auth/popup-blocked"?"Popup blocked. Please allow popups for this site and try again.":
+        e.code==="auth/popup-closed-by-user"?"":
+        e.code==="auth/cancelled-popup-request"?"":
+        "Google sign-in failed: "+e.message;
       if(msg) setErr(msg);
     }
     setGLoading(false);
@@ -6202,7 +6175,7 @@ function FeedLog({feeds,setFeeds,pigs,logs,sales,expenses,incomes,allData,user})
   const [filterType,setFilterType]=useState("");
   const [editId,setEditId]=useState(null);
   const [editForm,setEditForm]=useState(null);
-  const isAdmin=user&&(user.role==="admin"||user.email==="ndayishimiyealexis50@gmail.com");
+  const isAdmin=user&&(user.role==="admin"||user.email?.toLowerCase()==="ndayishimiyealexis50@gmail.com");
 
   // ── Core Calculations ──
   const totalKg=feeds.reduce((s,f)=>s+(parseFloat(f.kg)||0),0);
@@ -6461,7 +6434,7 @@ function FeedLog({feeds,setFeeds,pigs,logs,sales,expenses,incomes,allData,user})
 function SaleLog({sales,setSales,pigs,feeds,logs,expenses,incomes,allData,user}){
   const [editId,setEditId]=useState(null);
   const [editForm,setEditForm]=useState(null);
-  const isAdmin=user&&(user.role==="admin"||user.email==="ndayishimiyealexis50@gmail.com");
+  const isAdmin=user&&(user.role==="admin"||user.email?.toLowerCase()==="ndayishimiyealexis50@gmail.com");
   return(<div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
       <div><div style={S.h1}>Sales Records</div><div style={S.sub}>{sales.length} sales · {fmtRWF(sales.reduce((s,l)=>s+(l.total||0),0))}</div></div>
@@ -6507,7 +6480,7 @@ function SaleLog({sales,setSales,pigs,feeds,logs,expenses,incomes,allData,user})
 
 /* ─── Daily Logs ─── */
 function DLogs({logs,setLogs,pigs,feeds,sales,expenses,incomes,allData,user}){
-  const isAdmin=user&&(user.role==="admin"||user.email==="ndayishimiyealexis50@gmail.com");
+  const isAdmin=user&&(user.role==="admin"||user.email?.toLowerCase()==="ndayishimiyealexis50@gmail.com");
   return(<div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
       <div><div style={S.h1}>Daily Farm Logs</div><div style={S.sub}>{logs.length} reports</div></div>
@@ -6983,7 +6956,7 @@ function ConfirmDialog({title,body,onConfirm,onCancel}){
 function WorkerPigEntry({user,pigs,setPigs,pendingPigs,setPendingPigs}){
   const BREEDS=["Landrace","Large White","Duroc","Hampshire","Mixed/Local"];
   const STAGES=["Piglet","Weaner","Grower","Finisher","Gilt","Sow","Boar"];
-  const isAdmin=user&&(user.role==="admin"||user.email==="ndayishimiyealexis50@gmail.com");
+  const isAdmin=user&&(user.role==="admin"||user.email?.toLowerCase()==="ndayishimiyealexis50@gmail.com");
 
   function makeBlank(){
     const breed="Landrace",stage="Piglet";
@@ -7154,7 +7127,7 @@ function DEntry({user,pigs,logs,setLogs,capital,setCapital}){
 
   async function doSave(){
     setConfirm(false);
-    const isAdmin=user.role==="admin"||user.email==="ndayishimiyealexis50@gmail.com";
+    const isAdmin=user.role==="admin"||user.email?.toLowerCase()==="ndayishimiyealexis50@gmail.com";
     const newLog={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),approved:isAdmin?true:false};
     setLogs(p=>{const updated=[...p,newLog];fsSet("logs",updated);return updated;});
     if(isAdmin&&setCapital&&form.deaths>0&&parseFloat(form.deathLossAmount)>0){
@@ -7291,7 +7264,7 @@ function FEntry({user,pigs,feeds,setFeeds,capital,setCapital,tasks,setTasks}){
       setToast({type:"error",message:"Please enter valid kg and cost per kg values."});
       return;
     }
-    const isAdmin=user.role==="admin"||user.email==="ndayishimiyealexis50@gmail.com";
+    const isAdmin=user.role==="admin"||user.email?.toLowerCase()==="ndayishimiyealexis50@gmail.com";
     const costVal=totalCost;
     const newFeed={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),kg,cost:costVal,costPerKg,approved:isAdmin?true:false};
     setFeeds(p=>{const updated=[...p,newFeed];fsSet("feeds",updated);return updated;});
@@ -7445,7 +7418,7 @@ function SEntry({user,pigs,setPigs,sales,setSales,capital,setCapital}){
 
   async function doSave(){
     setConfirm(false);
-    const isAdmin=user.role==="admin"||user.email==="ndayishimiyealexis50@gmail.com";
+    const isAdmin=user.role==="admin"||user.email?.toLowerCase()==="ndayishimiyealexis50@gmail.com";
     const calcTotal=parseFloat(form.weight)*parseFloat(form.priceKg)||0;
     const finalTotal=parseFloat(form.total)||calcTotal;
     const newSale={...form,id:uid(),workerId:user.id,worker:user.name,date:toDay(),weight:parseFloat(form.weight)||0,priceKg:parseFloat(form.priceKg)||0,total:Math.round(finalTotal),approved:isAdmin?true:false};
@@ -7592,7 +7565,7 @@ function BEntry({user,expenses,setExpenses,capital,setCapital}){
 
   async function doSave(){
     setConfirm(false);
-    const isAdmin=user.role==="admin"||user.email==="ndayishimiyealexis50@gmail.com";
+    const isAdmin=user.role==="admin"||user.email?.toLowerCase()==="ndayishimiyealexis50@gmail.com";
     const newExp={
       id:uid(),workerId:user.id,worker:user.name,
       category:form.category,item:form.item||form.category,
