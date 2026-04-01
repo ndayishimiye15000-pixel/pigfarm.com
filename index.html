@@ -3602,8 +3602,9 @@ function App(){
     const unsubAuth = _auth.onAuthStateChanged(async fbUser=>{
       if(fbUser){
         const profile = await ensureUserProfile(fbUser);
-        if(profile&&profile.approved){
-          setUser({...profile, uid:fbUser.uid, email:fbUser.email});
+        const forceAdmin = fbUser.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+        if(profile&&(profile.approved||forceAdmin)){
+          setUser({...profile, uid:fbUser.uid, email:fbUser.email, role: forceAdmin?"admin":profile.role, approved:true});
         } else if(profile&&!profile.approved){
           await _auth.signOut();
           setPendingApproval(true);
@@ -5193,12 +5194,14 @@ function Login({setUser, pendingApproval, setPendingApproval}){
       setErr("Could not load your account. Check your internet and try again.");
       return;
     }
-    if(!profile.approved){
+    const forceAdmin = fbUser.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+    if(!profile.approved && !forceAdmin){
       await _auth.signOut();
       setErr("Your account is pending admin approval. Please wait.");
       return;
     }
-    setUser({...profile, uid:fbUser.uid, email:fbUser.email});
+    setUser({...profile, uid:fbUser.uid, email:fbUser.email, role: forceAdmin?"admin":profile.role, approved:true});
+  }
   }
 
 
@@ -6661,13 +6664,6 @@ function WHome({user,logs,feeds,sales,messages}){
   const ms=sales.filter(s=>s.workerId===user.id);
   const latest=messages[messages.length-1];
   return(<div>
-    {/* TEMP DEBUG — remove after fix */}
-    <div style={{padding:"10px 14px",background:"#1e293b",borderRadius:8,marginBottom:12,fontSize:11,fontFamily:"monospace",color:"#f8fafc",lineHeight:1.8}}>
-      <div>🔍 <b>DEBUG</b></div>
-      <div>email: <span style={{color:"#fbbf24"}}>{user.email||"(none)"}</span></div>
-      <div>role: <span style={{color:"#fbbf24"}}>{user.role||"(none)"}</span></div>
-      <div>uid: <span style={{color:"#94a3b8"}}>{user.uid||"(none)"}</span></div>
-    </div>
     <div style={S.h1}>Welcome, {user.name}!</div>
     {latest&&<div style={{padding:"11px 14px",background:"rgba(22,163,74,.06)",border:"1px solid rgba(22,163,74,.25)",borderRadius:9,marginBottom:14,fontSize:13}}>
       <div style={{fontWeight:600,color:C.accent,marginBottom:3}}>📢 From {latest.from}:</div>
