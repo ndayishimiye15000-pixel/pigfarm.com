@@ -3844,7 +3844,8 @@ function App(){
       </div>)}
       <div style={S.ui}>
         <div style={{fontSize:13,fontWeight:600,color:"#fff"}}>{user.name}</div>
-        <div style={{fontSize:11,color:"rgba(255,255,255,.5)",marginBottom:8,textTransform:"capitalize"}}>{user.role}</div>
+        <div style={{fontSize:11,color:"rgba(255,255,255,.5)",marginBottom:4,textTransform:"capitalize"}}>{user.role}</div>
+        <div style={{fontSize:9,color:"rgba(255,255,255,.35)",marginBottom:8,wordBreak:"break-all"}}>{user.email}</div>
         <button style={{...S.btn("#991b1b"),fontSize:12,padding:"6px 13px"}} onClick={async()=>{await _auth.signOut();setUser(null);}}>Sign Out</button>
       </div>
     </div>
