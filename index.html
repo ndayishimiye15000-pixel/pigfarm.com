@@ -3602,7 +3602,7 @@ function App(){
     const unsubAuth = _auth.onAuthStateChanged(async fbUser=>{
       if(fbUser){
         const profile = await ensureUserProfile(fbUser);
-        const forceAdmin = fbUser.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+        const forceAdmin = fbUser.email?.toLowerCase() === "ndayishimiyealexis50@gmail.com";
         if(profile&&(profile.approved||forceAdmin)){
           setUser({...profile, uid:fbUser.uid, email:fbUser.email, role: forceAdmin?"admin":profile.role, approved:true});
         } else if(profile&&!profile.approved){
@@ -5195,7 +5195,7 @@ function Login({setUser, pendingApproval, setPendingApproval}){
       setErr("Could not load your account. Check your internet and try again.");
       return;
     }
-    const forceAdmin = fbUser.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+    const forceAdmin = fbUser.email?.toLowerCase() === "ndayishimiyealexis50@gmail.com";
     if(!profile.approved && !forceAdmin){
       await _auth.signOut();
       setErr("Your account is pending admin approval. Please wait.");
@@ -5233,7 +5233,7 @@ function Login({setUser, pendingApproval, setPendingApproval}){
       const cred = await _auth.createUserWithEmailAndPassword(form.email.trim(), form.password);
       await ensureUserProfile(cred.user, {name:form.name.trim()});
       await _auth.signOut();
-      const isAdmin = form.email.trim()===ADMIN_EMAIL;
+      const isAdmin = form.email.trim().toLowerCase()==="ndayishimiyealexis50@gmail.com";
       if(isAdmin){
         setOk("Admin account created! You can now sign in.");
       } else {
