@@ -5202,7 +5202,6 @@ function Login({setUser, pendingApproval, setPendingApproval}){
     }
     setUser({...profile, uid:fbUser.uid, email:fbUser.email, role: forceAdmin?"admin":profile.role, approved:true});
   }
-  }
 
 
   async function login(){
